@@ -17,14 +17,14 @@ Built for personal use first, with a path to a commercial product.
 | `@psx/shared` — money, dates, charges, domain types | done, 18 tests |
 | `@psx/data` — PSX ingest, corporate-action detection | done, 44 tests, verified live |
 | `@psx/ledger` — tax lots, FIFO, cycles, buy-backs, P&L | done, 76 tests |
-| Database schema (19 tables) | done, validated; migration not yet run |
-| Express API — auth, portfolios, trades, positions, P&L | done, 98 tests + 38 DB-gated |
+| Database schema (19 tables) | done, migrated |
+| Express API — auth, portfolios, trades, positions, P&L | done, 136 tests |
 | `@psx/engine` — indicators, candles, factor scoring | next |
 | Next.js dashboard | not started |
 | Expo mobile app | not started |
 
-236 tests. `pnpm test` runs them all. The 38 integration tests skip unless a
-database is reachable.
+274 tests, all passing. `pnpm test` runs them all. The 38 API integration tests
+need a database and skip with a note when there isn't one.
 
 ## API
 
@@ -83,6 +83,9 @@ pnpm --filter @psx/api dev                 # api on :4000
 
 `infra:up` needs Docker running. Without it everything still builds and the
 unit tests pass; only the 38 integration tests skip.
+
+Postgres is on **5433** and Redis on **6380**, offset from the defaults so this
+never collides with another project's containers already using 5432/6379.
 
 To check the exchange feed is healthy right now:
 
