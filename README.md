@@ -21,10 +21,10 @@ Built for personal use first, with a path to a commercial product.
 | Express API — auth, portfolios, trades, positions, P&L | done, 136 tests |
 | `@psx/engine` — indicators, candles, explainable scoring | done, 180 tests |
 | Nightly ingest, signal endpoints, settling | done, live |
-| Next.js dashboard | next |
-| Expo mobile app | not started |
+| `@psx/web` — Next.js dashboard | done, 17 tests |
+| Expo mobile app | next |
 
-488 tests, all passing. `pnpm test` runs them all. The integration tests need a
+505 tests, all passing. `pnpm test` runs them all. The integration tests need a
 database and skip with a note when there isn't one.
 
 **Live state of the local database:** 225 trading days (2025-11-25 to
@@ -119,9 +119,9 @@ packages/
   ledger     Tax lots, FIFO matching, position cycles, buy-backs, P&L. No I/O.
   engine     Indicators, candle patterns, explainable factor scoring. No I/O.
 apps/
-  api        Prisma schema; Express routes next.
-  web        (later) Next.js dashboard.
-  mobile     (later) Expo.
+  api        Express, Prisma, the nightly job. Owns the database.
+  web        Next.js dashboard. Talks to the API over HTTP only.
+  mobile     (next) Expo.
 ```
 
 Two rules hold the design together:
@@ -222,6 +222,40 @@ automatically**. The LDCP gap is strong evidence but not proof, the exchange's
 announcements remain authoritative, and a mis-applied bonus issue corrupts a
 cost basis silently. `rebuildProjection` refuses to run while a confirmed
 action is unapplied, so a wrong share count cannot appear quietly.
+
+## The dashboard
+
+```bash
+pnpm --filter @psx/api dev    # :4000
+pnpm --filter @psx/web dev    # :3000
+```
+
+Four pages: positions, trades, P&L, and market data. The prediction view is the
+one the engine exists for — the factor table with each contribution drawn from
+a centre line, and selecting a factor marks on the chart the exact candles it
+fired on.
+
+**No token ever reaches the browser.** Both the access and refresh tokens live
+in httpOnly cookies that JavaScript cannot read, every API call happens in a
+server component or a server action, and the API's origin is never exposed to
+the client. An access token in `localStorage` is readable by any script that
+gets onto the page, and a refresh token there is a lasting account compromise.
+The cost is that interactive data comes through a server action or a navigation
+rather than a browser fetch, which for an app built on end-of-day prices is no
+cost at all.
+
+Token refresh happens in `middleware.ts` rather than in the API client, because
+a server component can read cookies but cannot set them — so it has nowhere to
+put a refreshed token. The middleware runs first and writes both cookies, which
+matters because the API rotates refresh tokens: storing only the new access
+token would leave the old refresh token to be replayed, and the API treats a
+replay as a theft and drops every session.
+
+**The UI never does arithmetic on money.** Amounts arrive as integer paisa and
+are divided exactly once, in `lib/format.ts`, at the moment they become text.
+Every total on screen is one the server computed, so a page cannot disagree
+with the ledger. A missing value renders as an em dash rather than `0.00`,
+because a holding with no price and a holding worth nothing are different facts.
 
 ## Predictions
 

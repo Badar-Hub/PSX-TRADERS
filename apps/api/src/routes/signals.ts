@@ -148,6 +148,64 @@ export function signalRoutes(tokens: Tokens): Router {
   );
 
   /**
+   * Price history for a chart.
+   *
+   * Returned unadjusted, exactly as the exchange published it, matching what is
+   * stored. Prices are paisa integers like everything else on the wire, so the
+   * client divides once at the point of display and never does arithmetic on a
+   * figure it might then disagree with.
+   */
+  router.get(
+    '/securities/:symbol/bars',
+    guard,
+    validate({
+      params: SymbolParams,
+      query: z.object({ limit: z.coerce.number().int().min(10).max(1000).default(180) }),
+    }),
+    async (req, res) => {
+      const { symbol } = params<z.infer<typeof SymbolParams>>(req);
+      const { limit } = query<{ limit: number }>(req);
+
+      const security = await prisma.security.findUnique({
+        where: { symbol },
+        select: { id: true, symbol: true, name: true },
+      });
+      if (security === null) throw notFound('Security');
+
+      const rows = await prisma.dailyBar.findMany({
+        where: { securityId: security.id },
+        orderBy: { date: 'desc' },
+        take: limit,
+        select: {
+          date: true,
+          open: true,
+          high: true,
+          low: true,
+          close: true,
+          volume: true,
+          closeOutsideRange: true,
+        },
+      });
+
+      res.json({
+        symbol: security.symbol,
+        name: security.name,
+        // Newest first from the query so the limit takes the most recent
+        // window; reversed here because a chart reads oldest to newest.
+        bars: rows.reverse().map((row) => ({
+          date: row.date.toISOString().slice(0, 10),
+          open: Number(row.open),
+          high: Number(row.high),
+          low: Number(row.low),
+          close: Number(row.close),
+          volume: row.volume,
+          closeOutsideRange: row.closeOutsideRange,
+        })),
+      });
+    },
+  );
+
+  /**
    * What price history is present.
    *
    * Worth exposing: a prediction built on a series with a three-week hole in it
