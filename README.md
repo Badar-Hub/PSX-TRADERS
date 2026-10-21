@@ -17,22 +17,72 @@ Built for personal use first, with a path to a commercial product.
 | `@psx/shared` — money, dates, charges, domain types | done, 18 tests |
 | `@psx/data` — PSX ingest, corporate-action detection | done, 44 tests, verified live |
 | `@psx/ledger` — tax lots, FIFO, cycles, buy-backs, P&L | done, 76 tests |
-| Database schema (19 tables) | done, validated; migration pending Docker |
-| Express API routes and auth | next |
-| `@psx/engine` — indicators, candles, factor scoring | not started |
+| Database schema (19 tables) | done, validated; migration not yet run |
+| Express API — auth, portfolios, trades, positions, P&L | done, 98 tests + 38 DB-gated |
+| `@psx/engine` — indicators, candles, factor scoring | next |
 | Next.js dashboard | not started |
 | Expo mobile app | not started |
 
-149 tests. `pnpm test` runs them all.
+236 tests. `pnpm test` runs them all. The 38 integration tests skip unless a
+database is reachable.
+
+## API
+
+```
+POST   /api/auth/register                         create an account (+ a "Main" portfolio)
+POST   /api/auth/login
+POST   /api/auth/refresh                          rotates the refresh token
+POST   /api/auth/logout
+GET    /api/auth/me
+
+GET    /api/portfolios
+POST   /api/portfolios
+GET    /api/portfolios/:id
+PATCH  /api/portfolios/:id
+GET    /api/portfolios/:id/positions              holdings, valued against the latest close
+GET    /api/portfolios/:id/cycles                 round trips and buy-backs
+
+POST   /api/portfolios/:id/trades                 record a trade
+GET    /api/portfolios/:id/trades                 paginated, filterable
+POST   /api/trades/:tradeId/reverse               cancel with a reversing entry
+
+GET    /api/portfolios/:id/reports/pnl            defaults to the current tax year
+
+GET    /health                                    liveness, no database touched
+GET    /health/ready                              readiness, 503 when the database is down
+```
+
+Three conventions worth knowing:
+
+**Amounts cross the wire as strings.** `"170.19"`, never the JSON number
+170.19 — which is already 170.18999999999999 once parsed, and rounding it back
+is guesswork. Responses return integer paisa.
+
+**There is no `DELETE` for a trade.** The ledger is append-only, so a mistake
+is cancelled by `POST /api/trades/:id/reverse`, which writes an opposing entry
+and leaves both rows. That is what makes the history auditable later.
+
+**Charges are optional on a trade.** Omit them and they are computed from the
+portfolio's brokerage account; supply them and the figures from your contract
+note are used verbatim, because reconciling against the broker matters more
+than internal consistency.
+
+Unowned resources return **404, not 403** — saying "forbidden" would confirm
+that another user's portfolio exists.
 
 ## Getting started
 
 ```bash
 pnpm install
-pnpm infra:up          # Postgres on 5433, Redis on 6380
-cp .env.example .env
+cp .env.example .env                       # then set real JWT secrets
+pnpm infra:up                              # Postgres on 5433, Redis on 6380
+pnpm --filter @psx/api db:migrate          # create the tables
 pnpm test
+pnpm --filter @psx/api dev                 # api on :4000
 ```
+
+`infra:up` needs Docker running. Without it everything still builds and the
+unit tests pass; only the 38 integration tests skip.
 
 To check the exchange feed is healthy right now:
 
