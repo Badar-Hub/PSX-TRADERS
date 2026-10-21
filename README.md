@@ -20,12 +20,15 @@ Built for personal use first, with a path to a commercial product.
 | Database schema (19 tables) | done, migrated |
 | Express API — auth, portfolios, trades, positions, P&L | done, 136 tests |
 | `@psx/engine` — indicators, candles, explainable scoring | done, 180 tests |
-| Signal endpoints and nightly ingest job | next |
-| Next.js dashboard | not started |
+| Nightly ingest, signal endpoints, settling | done, live |
+| Next.js dashboard | next |
 | Expo mobile app | not started |
 
-454 tests, all passing. `pnpm test` runs them all. The 38 API integration tests
-need a database and skip with a note when there isn't one.
+488 tests, all passing. `pnpm test` runs them all. The integration tests need a
+database and skip with a note when there isn't one.
+
+**Live state of the local database:** 225 trading days (2025-11-25 to
+2026-10-21), 533 securities, 109,099 bar rows, no gaps, 440 signals.
 
 To see a prediction and its reasoning:
 
@@ -54,6 +57,13 @@ GET    /api/portfolios/:id/trades                 paginated, filterable
 POST   /api/trades/:tradeId/reverse               cancel with a reversing entry
 
 GET    /api/portfolios/:id/reports/pnl            defaults to the current tax year
+
+GET    /api/securities/:symbol/signal             prediction + full factor table
+POST   /api/securities/:symbol/signal/refresh     recompute now
+GET    /api/signals/:id
+GET    /api/signals/stats/accuracy                the engine's own hit rate
+GET    /api/portfolios/:id/signals                a signal per holding
+GET    /api/market/coverage                       what price history is present
 
 GET    /health                                    liveness, no database touched
 GET    /health/ready                              readiness, 503 when the database is down
@@ -176,6 +186,43 @@ well as full exits:
 > Sold ABL at 130.00, bought back at 110.00 after 31 days: 2,000.00 better off
 > on 100 shares.
 
+## Running it
+
+```bash
+pnpm --filter @psx/api backfill --days 330   # one-off, ~5 min, resumable
+pnpm --filter @psx/api nightly               # schedule after the close
+```
+
+The nightly job does three things in order, because each depends on the last:
+ingest the day's prices, recompute signals from the new history, then settle
+any prediction whose horizon has now elapsed. A real run:
+
+```
+[nightly] ingest 2026-10-21: SUCCESS, 494 bars, 1 rows skipped, 14 warnings
+[nightly] corporate action: PNSC went ex-dividend: reference price cut by Rs 10.00
+[nightly] corporate action: FZCM went ex-entitlement: this reads either as a
+          Rs 15.00 dividend or as a 1.05x bonus issue. Which was it?
+[nightly] 21 action(s) recorded as DETECTED and awaiting confirmation
+[nightly] signals: 440 computed, 4 refused
+[nightly] settled 0: 0 hit, 0 missed, 0 neutral
+[nightly] done in 15.3s
+```
+
+It is a plain script, not a queued worker. One run a day over a few hundred
+symbols does not need Redis, a scheduler process or retry-with-backoff to be
+reliable; it needs to be **idempotent**, which it is. Re-running a date replaces
+that day's bars rather than duplicating or merging them, so a run that failed
+halfway is fixed by running it again. A missing archive file is recorded as
+`NO_FILE` and the run still succeeds — the exchange publishes nothing for
+weekends and public holidays, and Pakistan's holidays include lunar-calendar
+dates announced weeks ahead, so there is no calendar to validate against.
+
+Detected corporate actions land as `DETECTED` and are **never applied
+automatically**. The LDCP gap is strong evidence but not proof, the exchange's
+announcements remain authoritative, and a mis-applied bonus issue corrupts a
+cost basis silently. `rebuildProjection` refuses to run while a confirmed
+action is unapplied, so a wrong share count cannot appear quietly.
+
 ## Predictions
 
 Every prediction is a weighted sum of factors, and **each factor explains
@@ -246,17 +293,32 @@ That last rule is not only about quality. Telling someone to buy something is
 investment advice, which has licensing implications in Pakistan; describing
 what an analysis shows does not.
 
+### Sanity-checking the output
+
+On 21 Oct 2026 the 438 signals came out SELL 215, HOLD 163, BUY 55,
+STRONG_BUY 4, STRONG_SELL 1. A near 4:1 bearish skew looks alarming until you
+check the market it was describing: **387 of 513 symbols fell over the
+preceding 20 sessions, median −5.1%**. The skew tracks reality rather than
+revealing a tilt in the weights. This is the kind of check worth repeating
+whenever the weights change.
+
 ### Still missing
 
 - **Fundamentals have no source**, so long-term signals currently run on price
-  data alone with seven factors reporting as missing. The schema and the
-  factors are ready for them.
+  data alone with eight or nine factors reporting as missing — which is why
+  their confidence reads around 20% against the swing horizon's 50%. The schema
+  and the factors are ready for them.
 - **No index series**, so relative strength never reports. The KSE-100 is not
   in the daily OHLCV file and needs a separate source.
 - **The weights are a considered prior, not a fitted model.** They were chosen
   from what each factor measures. Fitting them is what the prediction-outcome
   tracking is for: once a few hundred signals have been settled, the per-factor
-  hit rate is evidence and these numbers can be revised against it.
+  hit rate is evidence and these numbers can be revised against it. Nothing has
+  settled yet — a swing horizon is 20 sessions.
+- **Six signals from an early run are stranded.** They were computed for
+  symbols that had stopped trading, so they carry a stale `asOf` and no later
+  bars exist to settle them against. `liquidSymbols` now excludes such symbols;
+  the old rows are harmless but will sit PENDING forever.
 
 ## Market data
 

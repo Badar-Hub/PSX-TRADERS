@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { rupeesToPaisa } from '@psx/shared';
 import { createApp } from '../../src/app.js';
 import { loadEnv } from '../../src/env.js';
@@ -29,13 +29,34 @@ async function databaseReachable(): Promise<boolean> {
   }
 }
 
-const hasDatabase = await databaseReachable();
+/**
+ * These tests truncate every table, including `securities` and `daily_bars`,
+ * which hold shared market data rather than per-user rows. Pointed at the
+ * development database, a run would silently destroy backfilled price history,
+ * and the only symptom would be predictions refusing for want of data.
+ *
+ * So the suite refuses to run unless the database is named like a test
+ * database. Failing to run is recoverable; deleting a year of prices is not.
+ */
+function isTestDatabase(): boolean {
+  const url = process.env.DATABASE_URL ?? '';
+  const name = url.split('/').pop()?.split('?')[0] ?? '';
+  return /test/i.test(name);
+}
 
-if (!hasDatabase) {
-  // eslint-disable-next-line no-console
+const onTestDatabase = isTestDatabase();
+const hasDatabase = onTestDatabase && (await databaseReachable());
+
+if (!onTestDatabase) {
   console.warn(
-    '\n  Skipping API integration tests: no database on DATABASE_URL.' +
-      '\n  Start one with `pnpm infra:up && pnpm --filter @psx/api db:deploy`.\n',
+    `\n  Skipping API integration tests: DATABASE_URL does not name a test database.` +
+      `\n  These tests truncate every table, so they refuse to touch anything else.` +
+      `\n  Set it up with \`pnpm --filter @psx/api db:test:setup\`.\n`,
+  );
+} else if (!hasDatabase) {
+  console.warn(
+    '\n  Skipping API integration tests: the test database is not reachable.' +
+      '\n  Start one with `pnpm infra:up && pnpm --filter @psx/api db:test:setup`.\n',
   );
 }
 
@@ -108,9 +129,10 @@ describe.skipIf(!hasDatabase)('API end to end', () => {
     session = await signUp('trader@example.com');
   });
 
-  afterAll(async () => {
-    await prisma.$disconnect();
-  });
+  // Deliberately no $disconnect here. The Prisma client is a process-wide
+  // singleton shared with the other integration file, so disconnecting at the
+  // end of this one leaves the next with a closed engine. The pool closes when
+  // the process exits.
 
   describe('health', () => {
     it('reports liveness without touching the database', async () => {
