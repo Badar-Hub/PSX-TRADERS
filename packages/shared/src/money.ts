@@ -136,6 +136,20 @@ export function applyBasisPoints(value: Paisa, bps: number, mode: Rounding = 'ha
  * reconciles against the sum of its lots.
  */
 export function allocatePaisa(total: Paisa, weights: number[]): Paisa[] {
+  return allocateInteger(total, weights).map((part) => paisa(part));
+}
+
+/**
+ * Splits a whole number across buckets so the parts sum to exactly the total.
+ *
+ * Used for money via `allocatePaisa`, and for share counts when a corporate
+ * action has to be spread over tax lots. Entitlements are computed by the
+ * registrar on the entire holding, so flooring a ratio lot by lot loses shares:
+ * a 10% bonus on two lots of 75 gives 7 each, where the holding of 150 is
+ * entitled to 15. Allocating the total fixes that.
+ */
+export function allocateInteger(total: number, weights: number[]): number[] {
+  if (!Number.isInteger(total)) throw new MoneyError(`Allocation total must be an integer, got ${total}`);
   if (weights.length === 0) return [];
   if (weights.some((w) => w < 0)) throw new MoneyError('Allocation weights must be non-negative');
   const weightTotal = weights.reduce((sum, w) => sum + w, 0);
@@ -144,7 +158,7 @@ export function allocatePaisa(total: Paisa, weights: number[]): Paisa[] {
   const parts = weights.map((w) => Math.floor((total * w) / weightTotal));
   let remainder = total - parts.reduce((sum, p) => sum + p, 0);
 
-  // Hand the leftover paisa to the largest weights first, so the distribution is
+  // Hand the leftover units to the largest weights first, so the distribution is
   // deterministic rather than dependent on iteration order.
   const order = weights
     .map((w, index) => ({ w, index }))
@@ -155,7 +169,7 @@ export function allocatePaisa(total: Paisa, weights: number[]): Paisa[] {
     if (slot === undefined) break;
     parts[slot.index] = (parts[slot.index] ?? 0) + 1;
   }
-  return parts.map((p) => paisa(p));
+  return parts;
 }
 
 const pkrFormat = new Intl.NumberFormat('en-PK', {

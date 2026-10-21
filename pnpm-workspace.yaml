@@ -2,8 +2,11 @@ packages:
   - "apps/*"
   - "packages/*"
 
-# esbuild ships a prebuilt binary via its install script; vitest needs it.
-# Approving it explicitly keeps every other package's lifecycle scripts blocked,
+# Approved explicitly so every other package's lifecycle scripts stay blocked,
 # which is the behaviour worth having in a repo that will grow dependencies.
+# esbuild and the Prisma packages both fetch prebuilt native binaries on install.
 allowBuilds:
+  '@prisma/client': true
+  '@prisma/engines': true
   esbuild: true
+  prisma: true

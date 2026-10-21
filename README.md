@@ -14,13 +14,16 @@ Built for personal use first, with a path to a commercial product.
 | Area | State |
 | --- | --- |
 | Monorepo scaffold (pnpm + turbo) | done |
-| `@psx/shared` — money, charges, domain types | done, 18 tests |
-| `@psx/data` — PSX ingest, corporate actions | done, 44 tests, verified live |
-| Database schema (tax lots, trades, rules) | next |
-| Express API | not started |
+| `@psx/shared` — money, dates, charges, domain types | done, 18 tests |
+| `@psx/data` — PSX ingest, corporate-action detection | done, 44 tests, verified live |
+| `@psx/ledger` — tax lots, FIFO, cycles, buy-backs, P&L | done, 76 tests |
+| Database schema (19 tables) | done, validated; migration pending Docker |
+| Express API routes and auth | next |
 | `@psx/engine` — indicators, candles, factor scoring | not started |
 | Next.js dashboard | not started |
 | Expo mobile app | not started |
+
+149 tests. `pnpm test` runs them all.
 
 ## Getting started
 
@@ -41,11 +44,12 @@ pnpm --filter @psx/data check
 
 ```
 packages/
-  shared     Money (integer paisa), charge schedules, domain types. No I/O.
+  shared     Money (integer paisa), dates, charge schedules, domain types. No I/O.
   psx        PSX Data Portal provider, file parsers, corporate-action detection.
+  ledger     Tax lots, FIFO matching, position cycles, buy-backs, P&L. No I/O.
   engine     (next) Indicators, candle patterns, factor scoring. Pure functions.
 apps/
-  api        (next) Express + Prisma. Owns the database and the job queue.
+  api        Prisma schema; Express routes next.
   web        (later) Next.js dashboard.
   mobile     (later) Expo.
 ```
@@ -58,6 +62,59 @@ Two rules hold the design together:
 2. **Money is never a float.** It is an integer count of paisa, with a branded
    TypeScript type so a raw number cannot be passed where an amount belongs.
    See `packages/shared/src/money.ts` for why.
+
+## The ledger
+
+Two rules decide how every number in a portfolio is produced.
+
+**The trade ledger is the only source of truth.** Trades are append-only: a
+mistake is corrected with a reversing entry, never an `UPDATE`. Lots, realised
+gains, positions and cycles are derived by replaying that ledger
+(`packages/ledger/src/replay.ts`). They are stored as tables for query speed,
+but the ledger wins any disagreement and a rebuild is always safe. That costs a
+replay and buys the ability to answer "why is this number what it is" for any
+figure in the app.
+
+**Sales consume specific lots, not an average.** A gain is realised against the
+particular shares disposed of, and PSX capital gains are assessed FIFO.
+Collapsing a holding to one average cost throws away what is needed to compute
+either the tax or an honest per-trade result, and it cannot be recovered later.
+LIFO and average costing are implemented too, for comparison rather than for tax.
+
+The invariant the package exists to protect: **for any lot, the basis consumed
+by sales plus the basis still open equals the basis it opened with, to the
+paisa, forever.** Every division of an amount goes through `allocatePaisa`,
+which splits a total without losing or inventing a paisa. This is checked over
+900 randomised trade histories with deliberately awkward share counts and odd
+prices, asserting exact equality rather than approximate.
+
+### Corporate actions
+
+A bonus issue raises the share count with no cash changing hands. Unapplied,
+the position looks as though it lost a tenth of its value per share overnight,
+every later gain is computed against a basis spread over too few shares, and
+the next sale of the full holding is rejected as a short because the ledger and
+the registrar disagree. So:
+
+- A bonus or split never changes total cost basis. The same money is spread
+  over more shares, lowering the per-share cost.
+- Entitlements are computed on the whole holding and then distributed. A 10%
+  bonus on two lots of 75 issues 15 shares; flooring per lot would issue 14.
+- A reverse split that rounds a small lot to nothing redistributes its basis
+  rather than discarding it.
+- A rights issue is a purchase, so it does raise the basis.
+- Dividends are income, not a return of capital: the basis is untouched.
+
+### Buy-backs
+
+Recording a repurchase of something previously sold, because it is a decision
+with an outcome no other figure captures. The realised gain shows what the exit
+made; it says nothing about whether getting out and back in beat simply
+holding. `advantage` answers that in rupees, and it is tracked for trims as
+well as full exits:
+
+> Sold ABL at 130.00, bought back at 110.00 after 31 days: 2,000.00 better off
+> on 100 shares.
 
 ## Market data
 

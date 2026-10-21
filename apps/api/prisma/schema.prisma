@@ -1,0 +1,845 @@
+// PSX Trader database schema.
+//
+// Two decisions shape everything here.
+//
+// 1. MONEY IS A BIGINT COUNT OF PAISA. No floats, no Decimal. A gain is derived
+//    from thousands of stored amounts, so a half-paisa drift per row compounds
+//    into a figure that cannot be reconciled against a broker statement. Paisa
+//    is uniform across every monetary column, including prices, so there is one
+//    conversion at the repository boundary rather than a per-column judgement.
+//    See packages/shared/src/money.ts.
+//
+// 2. THE TRADE LEDGER IS THE ONLY SOURCE OF TRUTH. Trades are append-only: a
+//    mistake is corrected by a reversing entry, never by an UPDATE. Tax lots,
+//    lot consumptions and position cycles are a materialised projection of that
+//    ledger, rebuilt by replaying it (packages/ledger/src/replay.ts). They exist
+//    as tables for query speed and so the alert engine can read a position
+//    without a replay, but the ledger wins any disagreement, and a rebuild is
+//    always safe to run.
+//
+// Multi-tenancy is present from the first migration. Every user-owned row
+// carries its ownership path, because retrofitting tenancy once there is real
+// data in the table is brutal.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  /// Drives which CGT rate the tax estimate uses.
+  isTaxFiler   Boolean  @default(true)
+  timezone     String   @default("Asia/Karachi")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  accounts      BrokerageAccount[]
+  portfolios    Portfolio[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+/// Refresh tokens are stored hashed so a database leak cannot be replayed as a
+/// login. Rows are kept after revocation for an audit trail.
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  userAgent String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("refresh_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Accounts and portfolios
+// ---------------------------------------------------------------------------
+
+/// A broker relationship. Charge rates live here because they are negotiated
+/// per account, and two accounts with the same broker can differ.
+model BrokerageAccount {
+  id         String  @id @default(cuid())
+  userId     String
+  name       String
+  brokerName String?
+
+  /// All rates in basis points (1 bp = 0.01%); fixed amounts in paisa.
+  /// Defaults are plausible placeholders, NOT verified statutory rates: set
+  /// them from a real contract note before trusting a P&L figure.
+  brokerageBps           Int    @default(15)
+  brokerageMinimum       BigInt @default(0)
+  brokeragePerShare      BigInt @default(0)
+  salesTaxOnBrokerageBps Int    @default(1300)
+  cdcBps                 Int    @default(1)
+  secpBps                Int    @default(1)
+  fixedPerOrder          BigInt @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  portfolios Portfolio[]
+
+  @@index([userId])
+  @@map("brokerage_accounts")
+}
+
+model Portfolio {
+  id        String  @id @default(cuid())
+  userId    String
+  accountId String?
+  name      String
+
+  /// FIFO is the default because it is how capital gains are assessed on the
+  /// PSX. The others exist for reporting comparisons, not for tax.
+  costBasisMethod CostBasisMethod @default(FIFO)
+
+  /// A paper portfolio is excluded from tax reports and real-money totals.
+  isPaperTrading Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user             User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account          BrokerageAccount?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  trades           Trade[]
+  taxLots          TaxLot[]
+  lotConsumptions  LotConsumption[]
+  cashTransactions CashTransaction[]
+  alertRules       AlertRule[]
+  actionsApplied   CorporateActionApplication[]
+  cycles           PositionCycle[]
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("portfolios")
+}
+
+// ---------------------------------------------------------------------------
+// Instrument and price data (shared across all users)
+// ---------------------------------------------------------------------------
+
+model Security {
+  id         String        @id @default(cuid())
+  /// PSX ticker, e.g. "HBL".
+  symbol     String        @unique
+  name       String
+  shortName  String?
+  /// 4-digit code for equities; "40"/"41"/"36" mark futures and debt boards.
+  sectorCode String?
+  segment    MarketSegment @default(EQUITY)
+  listing    ListingKind   @default(EQUITY)
+  /// Underlying ticker for a rights issue or futures contract.
+  baseSymbol String?
+  isActive   Boolean       @default(true)
+
+  firstSeenOn DateTime? @db.Date
+  lastSeenOn  DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bars             DailyBar[]
+  trades           Trade[]
+  taxLots          TaxLot[]
+  corporateActions CorporateAction[]
+  alertRules       AlertRule[]
+  signals          Signal[]
+  fundamentals     Fundamental[]
+  cycles           PositionCycle[]
+
+  @@index([segment, isActive])
+  @@index([baseSymbol])
+  @@map("securities")
+}
+
+/// One trading day for one security, as published by the exchange.
+///
+/// Stored unadjusted: exactly what PSX put in the file. Adjusting a stored
+/// series for splits in place destroys the ability to reconcile it against the
+/// exchange's own numbers, so adjustment happens at read time from the
+/// corporate-action table.
+model DailyBar {
+  securityId String
+  date       DateTime @db.Date
+
+  open   BigInt
+  high   BigInt
+  low    BigInt
+  close  BigInt
+  volume Int
+  /// Previous close as published. Its disagreement with the prior day's close
+  /// is how corporate actions are detected.
+  ldcp   BigInt?
+
+  /// True when the exchange's close fell outside the day's traded range, which
+  /// happens on near-untraded stocks. Flagged, not corrected.
+  closeOutsideRange Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  security Security @relation(fields: [securityId], references: [id], onDelete: Cascade)
+
+  @@id([securityId, date])
+  @@index([date])
+  @@map("daily_bars")
+}
+
+/// Audit trail for the ingest job, so a gap in the price history can be
+/// explained rather than guessed at.
+model IngestRun {
+  id         String       @id @default(cuid())
+  tradingDay DateTime     @db.Date
+  source     String       @default("psx-data-portal")
+  status     IngestStatus
+
+  barsInserted  Int @default(0)
+  barsUpdated   Int @default(0)
+  rowsSkipped   Int @default(0)
+  warningCount  Int @default(0)
+  actionsFound  Int @default(0)
+
+  /// Segment counts and warning details, for reading back a surprising run.
+  detail Json?
+  error  String?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@unique([tradingDay, source])
+  @@index([status, tradingDay])
+  @@map("ingest_runs")
+}
+
+/// Fundamentals for the long-term prediction factors.
+///
+/// Not available from the exchange's bulk files, so rows arrive from manual
+/// entry, report parsing, or a paid feed later. Nullable throughout: a factor
+/// with no data is skipped and reported as missing rather than scored as zero.
+model Fundamental {
+  id         String   @id @default(cuid())
+  securityId String
+  /// Period end the figures describe.
+  periodEnd  DateTime @db.Date
+  periodType PeriodType
+
+  epsPaisa        BigInt?
+  revenuePaisa    BigInt?
+  netIncomePaisa  BigInt?
+  equityPaisa     BigInt?
+  totalDebtPaisa  BigInt?
+  bookValuePaisa  BigInt?
+  dividendPaisa   BigInt?
+  /// Ratios in basis points, keeping integers end to end.
+  roeBps          Int?
+  debtToEquityBps Int?
+
+  source    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  security Security @relation(fields: [securityId], references: [id], onDelete: Cascade)
+
+  @@unique([securityId, periodEnd, periodType])
+  @@index([securityId, periodEnd])
+  @@map("fundamentals")
+}
+
+// ---------------------------------------------------------------------------
+// The trade ledger (append-only)
+// ---------------------------------------------------------------------------
+
+model Trade {
+  id          String    @id @default(cuid())
+  portfolioId String
+  securityId  String
+  side        TradeSide
+  tradedOn    DateTime  @db.Date
+  /// Orders trades within a date. Without it, a same-day sale can be replayed
+  /// before the purchase it closes.
+  sequence    Int       @default(0)
+
+  quantity  Int
+  unitPrice BigInt
+
+  /// Charges itemised, because the user will ask why a trade cost what it did,
+  /// and because only some components are deductible in a tax report.
+  brokerage BigInt @default(0)
+  salesTax  BigInt @default(0)
+  cdc       BigInt @default(0)
+  secp      BigInt @default(0)
+  otherFees BigInt @default(0)
+  /// Sum of the above, denormalised: it is read on every replay.
+  charges   BigInt @default(0)
+
+  /// Cash in or out: a buy costs value plus charges, a sale returns value less
+  /// charges.
+  netCashFlow BigInt
+
+  status TradeStatus @default(ACTIVE)
+  /// Set on a reversing entry, pointing at the trade it cancels. Corrections
+  /// are new rows, so the history of what was believed stays intact.
+  reversesTradeId String? @unique
+  note            String?
+  /// Broker contract-note reference, for reconciliation.
+  externalRef     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  portfolio    Portfolio        @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  security     Security         @relation(fields: [securityId], references: [id], onDelete: Restrict)
+  reverses     Trade?           @relation("TradeReversal", fields: [reversesTradeId], references: [id], onDelete: SetNull)
+  reversedBy   Trade?           @relation("TradeReversal")
+  openedLot    TaxLot?
+  consumptions LotConsumption[]
+
+  @@index([portfolioId, securityId, tradedOn])
+  @@index([portfolioId, tradedOn])
+  @@index([securityId, tradedOn])
+  @@map("trades")
+}
+
+// ---------------------------------------------------------------------------
+// Derived projection: lots, consumptions, cycles
+// ---------------------------------------------------------------------------
+
+/// A purchase, or the remainder of one, available to be sold.
+///
+/// `costBasis` is the total for the shares still open, inclusive of the buy
+/// charges attributed to them. Per-share cost is always derived, never stored,
+/// so the lot total stays the authoritative figure.
+model TaxLot {
+  id          String    @id @default(cuid())
+  portfolioId String
+  securityId  String
+  /// Null for shares that arrived without a trade, i.e. a bonus issue.
+  openTradeId String?   @unique
+  source      LotSource @default(PURCHASE)
+
+  openedOn DateTime @db.Date
+
+  originalQuantity  Int
+  remainingQuantity Int
+  originalCostBasis BigInt
+  remainingCostBasis BigInt
+
+  closedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  portfolio    Portfolio        @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  security     Security         @relation(fields: [securityId], references: [id], onDelete: Restrict)
+  openTrade    Trade?           @relation(fields: [openTradeId], references: [id], onDelete: SetNull)
+  consumptions LotConsumption[]
+
+  /// The alert engine and position views read open lots constantly.
+  @@index([portfolioId, securityId, remainingQuantity])
+  @@index([portfolioId, securityId, openedOn])
+  @@map("tax_lots")
+}
+
+/// One lot consumed by one sale: where realised gains actually live.
+///
+/// The invariant the ledger package protects: for any lot, the basis consumed
+/// across its consumptions plus its remaining basis equals the basis it opened
+/// with, to the paisa.
+model LotConsumption {
+  id          String @id @default(cuid())
+  portfolioId String
+  taxLotId    String
+  sellTradeId String
+
+  quantity Int
+  /// Portion of the lot's basis consumed.
+  costBasis BigInt
+  /// Portion of the sale's net proceeds attributed to these shares.
+  proceeds BigInt
+  /// proceeds - costBasis.
+  realisedPnl BigInt
+  /// Days held, which decides the capital-gains band.
+  holdingDays Int
+
+  soldOn    DateTime @db.Date
+  createdAt DateTime @default(now())
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  taxLot    TaxLot    @relation(fields: [taxLotId], references: [id], onDelete: Cascade)
+  sellTrade Trade     @relation(fields: [sellTradeId], references: [id], onDelete: Cascade)
+
+  @@index([portfolioId, soldOn])
+  @@index([sellTradeId])
+  @@index([taxLotId])
+  @@map("lot_consumptions")
+}
+
+/// A round trip: from opening a position to going flat again.
+///
+/// Stored so "how did I do on this stock" is answerable without a replay, and
+/// so a repurchase can be measured against the exit that preceded it.
+model PositionCycle {
+  id          String @id @default(cuid())
+  portfolioId String
+  securityId  String
+  /// 0-based index within this portfolio and security.
+  cycleIndex  Int
+
+  openedOn DateTime  @db.Date
+  closedOn DateTime? @db.Date
+
+  sharesBought Int
+  sharesSold   Int
+
+  totalInvested BigInt
+  totalProceeds BigInt
+  realisedPnl   BigInt
+
+  entryAveragePrice BigInt
+  exitAveragePrice  BigInt?
+  holdingDays       Int?
+
+  /// Set when this cycle re-entered a stock the previous cycle had exited.
+  isBuyBack            Boolean @default(false)
+  /// Weighted average price of the sales that preceded the re-entry.
+  previousExitPrice    BigInt?
+  daysOutOfPosition    Int?
+  /// Rupee benefit of having been out, over the shares bought back. Positive
+  /// when the repurchase was cheaper than the exit.
+  buyBackAdvantage     BigInt?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  security  Security  @relation(fields: [securityId], references: [id], onDelete: Restrict)
+
+  @@unique([portfolioId, securityId, cycleIndex])
+  @@index([portfolioId, closedOn])
+  @@map("position_cycles")
+}
+
+/// Cash movements, so a portfolio reconciles against a bank and dividends
+/// appear as the income they are.
+model CashTransaction {
+  id          String       @id @default(cuid())
+  portfolioId String
+  type        CashFlowType
+  occurredOn  DateTime     @db.Date
+
+  /// Positive into the account, negative out.
+  amount      BigInt
+  taxWithheld BigInt  @default(0)
+  note        String?
+
+  /// Set when this cash came from a corporate action.
+  corporateActionId String?
+
+  createdAt DateTime @default(now())
+
+  portfolio       Portfolio        @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  corporateAction CorporateAction? @relation(fields: [corporateActionId], references: [id], onDelete: SetNull)
+
+  @@index([portfolioId, occurredOn])
+  @@map("cash_transactions")
+}
+
+// ---------------------------------------------------------------------------
+// Corporate actions
+// ---------------------------------------------------------------------------
+
+/// A corporate action against a security, detected or entered by hand.
+///
+/// Detection comes from the price series: LDCP disagreeing with the prior
+/// close is an ex-date adjustment, and the gap is the action. Those arrive as
+/// DETECTED and must be CONFIRMED before they are allowed to change a cost
+/// basis, because the exchange's announcements remain authoritative and a
+/// mis-applied action corrupts a portfolio silently.
+model CorporateAction {
+  id         String              @id @default(cuid())
+  securityId String
+  type       CorporateActionType
+  status     ActionStatus        @default(DETECTED)
+
+  exDate     DateTime  @db.Date
+  recordDate DateTime? @db.Date
+  payDate    DateTime? @db.Date
+
+  /// CASH_DIVIDEND: gross cash per share.
+  amountPerShare BigInt?
+  /// Tax deducted at source, in basis points.
+  taxWithheldBps Int?
+  /// BONUS: new shares per share held, in basis points (1000 = 10%).
+  bonusRatioBps  Int?
+  /// SPLIT: share multiplier in basis points (20000 = 2-for-1).
+  splitRatioBps  Int?
+  /// RIGHT: entitlement per share in basis points, and the subscription price.
+  rightsRatioBps     Int?
+  subscriptionPrice  BigInt?
+
+  /// How detection reached this row: the price gap it was inferred from.
+  detectedFromDelta BigInt?
+  detectedRatio     Float?
+  /// True when the gap fits both a dividend and a bonus issue, so the user is
+  /// asked which it was rather than told.
+  isAmbiguous       Boolean @default(false)
+  detectionNote     String?
+  announcementUrl   String?
+
+  confirmedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  security         Security                     @relation(fields: [securityId], references: [id], onDelete: Cascade)
+  applications     CorporateActionApplication[]
+  cashTransactions CashTransaction[]
+
+  @@unique([securityId, type, exDate])
+  @@index([status, exDate])
+  @@index([exDate])
+  @@map("corporate_actions")
+}
+
+/// What an action did to one portfolio. Separate from the action itself because
+/// the same action affects every holder differently, and a portfolio that did
+/// not hold the stock on the ex-date is unaffected.
+model CorporateActionApplication {
+  id                String @id @default(cuid())
+  corporateActionId String
+  portfolioId       String
+
+  sharesHeldOnExDate    Int
+  sharesAdded           Int    @default(0)
+  grossCash             BigInt @default(0)
+  taxWithheld           BigInt @default(0)
+  netCash               BigInt @default(0)
+  cashPaid              BigInt @default(0)
+  /// Entitlement left over after whole shares, which the exchange pays in cash.
+  fractionalEntitlement Float  @default(0)
+
+  note      String?
+  appliedAt DateTime @default(now())
+
+  corporateAction CorporateAction @relation(fields: [corporateActionId], references: [id], onDelete: Cascade)
+  portfolio       Portfolio       @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@unique([corporateActionId, portfolioId])
+  @@index([portfolioId])
+  @@map("corporate_action_applications")
+}
+
+// ---------------------------------------------------------------------------
+// Alerts: stop-loss, trailing stop, take-profit
+// ---------------------------------------------------------------------------
+
+/// A rule the evaluation job checks against each new bar.
+///
+/// These are alerts, not orders. PSX brokers do not generally expose an order
+/// API to retail, so the engine tells the user to act rather than acting.
+model AlertRule {
+  id          String      @id @default(cuid())
+  portfolioId String
+  securityId  String
+  type        RuleType
+  status      RuleStatus  @default(ARMED)
+  /// Which price the rule watches. CLOSE is the honest default on EOD data.
+  triggerOn   RuleTrigger @default(CLOSE)
+
+  /// STOP_LOSS, TAKE_PROFIT, PRICE_ALERT: the level watched.
+  thresholdPrice BigInt?
+
+  /// TRAILING_STOP: the trail, as a fixed amount or in basis points.
+  trailAmount BigInt?
+  trailBps    Int?
+  /// Highest price seen since the rule was armed, which the trail follows up
+  /// and never down. This is the rule's state, and why it is stored.
+  highWaterMark BigInt?
+  /// Current effective stop, derived from the high-water mark and the trail.
+  effectiveStop BigInt?
+
+  /// Shares the alert covers, for position sizing in the notification.
+  quantity Int?
+  note     String?
+
+  armedAt    DateTime  @default(now())
+  expiresAt  DateTime?
+  lastCheckedOn DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  portfolio Portfolio    @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  security   Security     @relation(fields: [securityId], references: [id], onDelete: Cascade)
+  events     AlertEvent[]
+
+  /// The evaluation job scans armed rules by security.
+  @@index([status, securityId])
+  @@index([portfolioId, status])
+  @@map("alert_rules")
+}
+
+/// A rule firing, kept as history so a trailing stop can be reviewed after the
+/// fact rather than only seen once as a notification.
+model AlertEvent {
+  id     String @id @default(cuid())
+  ruleId String
+
+  triggeredOn   DateTime @db.Date
+  triggerPrice  BigInt
+  /// Stop level at the moment it fired, which a trailing stop has moved.
+  stopAtTrigger BigInt?
+  highWaterMark BigInt?
+  message       String
+
+  notifiedAt      DateTime?
+  acknowledgedAt  DateTime?
+  createdAt       DateTime  @default(now())
+
+  rule AlertRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([ruleId, triggeredOn])
+  @@index([notifiedAt])
+  @@map("alert_events")
+}
+
+// ---------------------------------------------------------------------------
+// Predictions
+// ---------------------------------------------------------------------------
+
+/// A prediction for one security on one horizon, as of one trading day.
+///
+/// The score is a weighted sum over SignalFactor rows, which carry the
+/// evidence. `outcome` is settled later by a job, so the system can report its
+/// own historical hit rate instead of asking to be trusted.
+model Signal {
+  id         String        @id @default(cuid())
+  securityId String
+  horizon    SignalHorizon
+  /// Date of the last bar the signal was computed from.
+  asOf       DateTime      @db.Date
+
+  action SignalAction
+  /// Weighted total, -100..+100, stored x100 as an integer.
+  scoreX100 Int
+  /// 0..1 stored in basis points. Reflects factor agreement and data coverage,
+  /// not probability of being right.
+  confidenceBps Int
+  /// Factors skipped for want of data, usually fundamentals.
+  missingFactors Int @default(0)
+
+  /// LLM prose written over the factor table. The factors are the source of
+  /// truth; this is a rendering and is cached so it is not regenerated per view.
+  narrative      String?
+  narrativeModel String?
+
+  /// Settled after the horizon has elapsed.
+  outcome        SignalOutcome @default(PENDING)
+  priceAtSignal  BigInt?
+  priceAtOutcome BigInt?
+  settledAt      DateTime?
+
+  engineVersion String
+  createdAt     DateTime @default(now())
+
+  security Security       @relation(fields: [securityId], references: [id], onDelete: Cascade)
+  factors  SignalFactor[]
+
+  @@unique([securityId, horizon, asOf, engineVersion])
+  @@index([horizon, asOf])
+  @@index([outcome, asOf])
+  @@map("signals")
+}
+
+/// One scored piece of evidence behind a signal.
+///
+/// The observed value is stored alongside the score so the explanation can
+/// never drift from the number that produced the call, and so an old
+/// prediction stays auditable after the weights have been retuned.
+model SignalFactor {
+  id       String @id @default(cuid())
+  signalId String
+
+  /// Stable identifier, e.g. "ema_alignment" or "rsi_14".
+  key      String
+  label    String
+  category FactorCategory
+
+  /// -100..+100, stored x100.
+  scoreX100 Int
+  /// Weight applied for this horizon, in basis points.
+  weightBps Int
+  /// score * weight, stored x100.
+  contributionX100 Int
+
+  /// The observed value, e.g. 58.3 for RSI. Null for a qualitative factor.
+  value Float?
+  /// Rendering of the value, e.g. "20 > 50 > 200" or "1.8x average".
+  display String
+  /// One sentence the user reads, generated from the numbers, not by an LLM.
+  reason String
+  /// Bars the factor matched on, so the chart can highlight them.
+  barDates DateTime[] @db.Date
+
+  signal Signal @relation(fields: [signalId], references: [id], onDelete: Cascade)
+
+  @@unique([signalId, key])
+  @@index([signalId])
+  @@map("signal_factors")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum TradeSide {
+  BUY
+  SELL
+}
+
+enum TradeStatus {
+  ACTIVE
+  REVERSED
+}
+
+enum CostBasisMethod {
+  FIFO
+  LIFO
+  AVERAGE
+}
+
+enum LotSource {
+  PURCHASE
+  BONUS
+  RIGHT
+  SPLIT
+  TRANSFER_IN
+}
+
+enum CorporateActionType {
+  CASH_DIVIDEND
+  BONUS
+  RIGHT
+  SPLIT
+  REVERSE_SPLIT
+  MERGER
+  DELISTING
+}
+
+enum ActionStatus {
+  DETECTED
+  CONFIRMED
+  REJECTED
+  APPLIED
+}
+
+enum CashFlowType {
+  DEPOSIT
+  WITHDRAWAL
+  DIVIDEND
+  RIGHTS_SUBSCRIPTION
+  FRACTIONAL_SETTLEMENT
+  TAX
+  FEE
+  ADJUSTMENT
+}
+
+enum MarketSegment {
+  EQUITY
+  FUTURE
+  INDEX_FUTURE
+  DEBT
+  UNKNOWN
+}
+
+enum ListingKind {
+  EQUITY
+  RIGHT
+  FUTURE
+  ETF
+  PREFERENCE
+}
+
+enum PeriodType {
+  QUARTER
+  HALF_YEAR
+  FULL_YEAR
+}
+
+enum IngestStatus {
+  RUNNING
+  SUCCESS
+  NO_FILE
+  FAILED
+}
+
+enum RuleType {
+  STOP_LOSS
+  TRAILING_STOP
+  TAKE_PROFIT
+  PRICE_ALERT
+  INDICATOR_ALERT
+}
+
+enum RuleStatus {
+  ARMED
+  TRIGGERED
+  CANCELLED
+  EXPIRED
+}
+
+enum RuleTrigger {
+  CLOSE
+  INTRADAY_LOW
+  INTRADAY_HIGH
+}
+
+enum SignalHorizon {
+  SWING
+  LONG_TERM
+}
+
+enum SignalAction {
+  STRONG_BUY
+  BUY
+  HOLD
+  SELL
+  STRONG_SELL
+}
+
+enum FactorCategory {
+  TREND
+  MOMENTUM
+  VOLATILITY
+  VOLUME
+  PATTERN
+  VALUATION
+  GROWTH
+  QUALITY
+  LEVERAGE
+  MARKET
+}
+
+enum SignalOutcome {
+  PENDING
+  HIT
+  MISS
+  NEUTRAL
+  VOIDED
+}
