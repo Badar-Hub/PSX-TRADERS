@@ -4,6 +4,8 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import helmet from 'helmet';
 import { errorHandler, notFoundHandler } from './http/errors.js';
 import { Tokens } from './auth/tokens.js';
+import { createMailer, type Mailer } from './email/mailer.js';
+import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
 import { portfolioRoutes } from './routes/portfolios.js';
 import { reportRoutes } from './routes/reports.js';
@@ -29,6 +31,8 @@ export interface AppOptions {
   env: Env;
   /** Overridden in tests to keep expected errors out of the output. */
   logError?: (error: unknown, context: { requestId?: string; method: string; path: string }) => void;
+  /** Overridden in tests with a recording mailer, so nothing is sent. */
+  mailer?: Mailer;
 }
 
 export function createApp(options: AppOptions): Express {
@@ -84,7 +88,10 @@ export function createApp(options: AppOptions): Express {
     }
   });
 
-  app.use('/api/auth', authRoutes(tokens));
+  const mailer = options.mailer ?? createMailer(env);
+
+  app.use('/api/auth', authRoutes(tokens, env, mailer));
+  app.use('/api', adminRoutes(tokens, env, mailer));
   app.use('/api/portfolios', portfolioRoutes(tokens));
   app.use('/api', tradeRoutes(tokens));
   app.use('/api', reportRoutes(tokens));

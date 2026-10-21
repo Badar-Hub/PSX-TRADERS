@@ -24,6 +24,59 @@ const Schema = z.object({
   /** Comma-separated list of allowed browser origins. */
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
 
+  /** Where the sign-in link in emails points. */
+  APP_URL: z.string().url().default('http://localhost:3000'),
+
+  /**
+   * `console` prints mail instead of sending it, for running with no mail
+   * server. Refused in production by `createMailer`, because a verification
+   * email written to stdout is an account nobody can verify.
+   */
+  EMAIL_TRANSPORT: z.enum(['smtp', 'console']).default('smtp'),
+  /**
+   * 127.0.0.1, not "localhost".
+   *
+   * Node resolves "localhost" to ::1 before 127.0.0.1, and a local mail catcher
+   * bound to 127.0.0.1 — which is what `docker run -p 1025:1025` gives you —
+   * refuses the IPv6 connection. The failure reads `ECONNREFUSED ::1:1025`,
+   * which looks like the mail server is down rather than listening on the
+   * other loopback.
+   */
+  SMTP_HOST: z.string().default('127.0.0.1'),
+  SMTP_PORT: z.coerce.number().int().positive().default(1025),
+  SMTP_SECURE: z
+    .union([z.literal('true'), z.literal('false'), z.boolean()])
+    .transform((value) => value === true || value === 'true')
+    .default(false),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  EMAIL_FROM: z.string().default('PSX Trader <no-reply@psx-trader.local>'),
+
+  /**
+   * Ten minutes, as asked for. Short enough that a code read off a screen or
+   * forwarded inbox is stale quickly, long enough to survive mail delivery and
+   * someone switching between their phone and their laptop.
+   */
+  VERIFICATION_TTL_MINUTES: z.coerce.number().int().min(1).max(120).default(10),
+  /** Wrong guesses before the code is burned. Five is enough for a typo. */
+  VERIFICATION_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  /** Stops a resend button from becoming a way to mail-bomb someone. */
+  VERIFICATION_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+
+  /**
+   * Per-IP request budgets over 15 minutes, for the credential and code
+   * endpoints respectively.
+   *
+   * Configurable rather than fixed so the test suite can raise them. With the
+   * production values, a suite that signs up thirty accounts from one address
+   * trips the limiter and every later assertion fails on a 429 instead of
+   * testing what it claims to. Raising them in `.env.test` also means the
+   * resend test's 429 comes from the per-account cooldown it is actually
+   * about, not from the IP limiter shadowing it.
+   */
+  AUTH_RATE_LIMIT: z.coerce.number().int().min(1).max(100_000).default(20),
+  CODE_RATE_LIMIT: z.coerce.number().int().min(1).max(100_000).default(10),
+
   PSX_DOWNLOAD_BASE: z.string().url().default('https://dps.psx.com.pk/download'),
 
   ANTHROPIC_API_KEY: z.string().optional(),

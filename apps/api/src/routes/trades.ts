@@ -12,7 +12,8 @@ import {
   wholeShares,
   body,
 } from '../http/validate.js';
-import { currentUser, requireUser } from '../auth/middleware.js';
+import { currentUser } from '../auth/middleware.js';
+import { requireActiveUser } from '../auth/access.js';
 import type { Tokens } from '../auth/tokens.js';
 import { createTrade, listTrades, reverseTrade } from '../services/trades.js';
 
@@ -78,11 +79,11 @@ export function tradeRoutes(tokens: Tokens): Router {
   // Applied per route rather than with router.use(). This router is mounted at
   // the bare /api prefix, so a blanket guard would challenge every unknown
   // /api/... path and answer 401 where the honest response is 404.
-  const guard = requireUser(tokens);
+  const guard = requireActiveUser(tokens);
 
   router.post(
     '/portfolios/:portfolioId/trades',
-    guard,
+    ...guard,
     validate({ params: PortfolioParams, body: CreateTradeBody }),
     async (req, res) => {
       const { portfolioId } = params<z.infer<typeof PortfolioParams>>(req);
@@ -109,7 +110,7 @@ export function tradeRoutes(tokens: Tokens): Router {
 
   router.get(
     '/portfolios/:portfolioId/trades',
-    guard,
+    ...guard,
     validate({ params: PortfolioParams, query: ListQuery }),
     async (req, res) => {
       const { portfolioId } = params<z.infer<typeof PortfolioParams>>(req);
@@ -139,7 +140,7 @@ export function tradeRoutes(tokens: Tokens): Router {
    */
   router.post(
     '/trades/:tradeId/reverse',
-    guard,
+    ...guard,
     validate({ params: TradeParams, body: ReverseBody }),
     async (req, res) => {
       const { tradeId } = params<z.infer<typeof TradeParams>>(req);

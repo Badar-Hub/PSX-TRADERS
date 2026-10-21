@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { conflict, notFound } from '../http/errors.js';
 import { body, cuid, params, validate } from '../http/validate.js';
 import { prisma } from '../db/prisma.js';
-import { currentUser, requireUser } from '../auth/middleware.js';
+import { currentUser } from '../auth/middleware.js';
+import { requireActiveUser } from '../auth/access.js';
 import type { Tokens } from '../auth/tokens.js';
 import { getPortfolioCycles, getPortfolioPositions } from '../services/positions.js';
 import { loadOwnedPortfolio } from '../services/trades.js';
@@ -27,7 +28,7 @@ const IdParams = z.object({ id: cuid });
 
 export function portfolioRoutes(tokens: Tokens): Router {
   const router = Router();
-  router.use(requireUser(tokens));
+  router.use(...requireActiveUser(tokens));
 
   router.get('/', async (req, res) => {
     const { id: userId } = currentUser(req);

@@ -4,6 +4,7 @@ import { rupeesToPaisa } from '@psx/shared';
 import { createApp } from '../../src/app.js';
 import { loadEnv } from '../../src/env.js';
 import { prisma } from '../../src/db/prisma.js';
+import { mailer, signUpActive } from '../helpers/account.js';
 
 /**
  * End-to-end tests over real HTTP against a real database.
@@ -88,6 +89,9 @@ const app = hasDatabase
       env: loadEnv(),
       // Expected 500s would otherwise clutter the output; there should be none.
       logError: () => {},
+      // Records mail instead of sending it, and lets the sign-up helper read
+      // the verification code back out.
+      mailer,
     })
   : null;
 
@@ -98,21 +102,27 @@ interface Session {
   portfolioId: string;
 }
 
+/**
+ * An account that can actually use the app.
+ *
+ * Onboarding now has two gates, so this walks the real flow — register, read
+ * the code out of the recorded email, verify — and then flips the approval
+ * directly. The approval endpoint has its own tests in `onboarding.test.ts`;
+ * going through it here would need an admin fixture for every suite that only
+ * wanted somewhere to record a trade.
+ */
 async function signUp(email: string): Promise<Session> {
-  const response = await request(app!)
-    .post('/api/auth/register')
-    .send({ email, password: 'a-long-enough-password', name: 'Test User' })
-    .expect(201);
+  const active = await signUpActive(app!, email);
 
   const portfolios = await request(app!)
     .get('/api/portfolios')
-    .set('authorization', `Bearer ${response.body.accessToken}`)
+    .set('authorization', `Bearer ${active.accessToken}`)
     .expect(200);
 
   return {
-    accessToken: response.body.accessToken,
-    refreshToken: response.body.refreshToken,
-    userId: response.body.user.id,
+    accessToken: active.accessToken,
+    refreshToken: active.refreshToken,
+    userId: active.userId,
     portfolioId: portfolios.body.portfolios[0].id,
   };
 }

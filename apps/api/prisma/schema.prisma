@@ -42,14 +42,65 @@ model User {
   /// Drives which CGT rate the tax estimate uses.
   isTaxFiler   Boolean  @default(true)
   timezone     String   @default("Asia/Karachi")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+
+  /// Where the account is in onboarding. Two gates must both pass before the
+  /// account can do anything: the user proves the email is theirs, then an
+  /// admin lets them in. Kept as one status rather than two booleans so an
+  /// impossible combination cannot be represented.
+  status UserStatus @default(PENDING_VERIFICATION)
+  role   UserRole   @default(MEMBER)
+
+  emailVerifiedAt DateTime?
+  approvedAt      DateTime?
+  /// Who let them in. Null for the bootstrap admin, created from the CLI.
+  approvedById    String?
+  decisionNote    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   accounts      BrokerageAccount[]
   portfolios    Portfolio[]
   refreshTokens RefreshToken[]
+  verifications EmailVerification[]
 
+  approvedBy    User?  @relation("UserApproval", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedUsers User[] @relation("UserApproval")
+
+  /// The admin queue reads pending accounts oldest first.
+  @@index([status, createdAt])
   @@map("users")
+}
+
+/// A short-lived code emailed to prove the address is the user's.
+///
+/// Only a hash of the code is stored, for the same reason as refresh tokens: a
+/// leaked database should yield nothing replayable. A six-digit code has only a
+/// million possibilities, so the hash alone is not the defence — `attempts` is.
+/// Five wrong guesses burn the code, which makes guessing cost an email round
+/// trip per five tries rather than being free.
+model EmailVerification {
+  id        String           @id @default(cuid())
+  userId    String
+  purpose   VerificationPurpose @default(EMAIL_VERIFICATION)
+  codeHash  String
+  /// The address it was actually sent to, so a later email change is auditable.
+  sentTo    String
+
+  /// Ten minutes after issue. Checked on use; expired rows are swept by a job.
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+
+  createdAt DateTime @default(now())
+  /// Set when a code is superseded by a resend, so the old one stops working.
+  supersededAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, createdAt])
+  @@index([expiresAt])
+  @@map("email_verifications")
 }
 
 /// Refresh tokens are stored hashed so a database leak cannot be replayed as a
@@ -707,6 +758,29 @@ model SignalFactor {
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
+
+/// Onboarding and access state.
+///
+/// The order is the happy path: verify the email, wait for an admin, then use
+/// the app. REJECTED and SUSPENDED are both "no access" but mean different
+/// things to the person and to whoever reviews the queue later.
+enum UserStatus {
+  PENDING_VERIFICATION
+  PENDING_APPROVAL
+  ACTIVE
+  REJECTED
+  SUSPENDED
+}
+
+enum UserRole {
+  MEMBER
+  ADMIN
+}
+
+enum VerificationPurpose {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
 
 enum TradeSide {
   BUY

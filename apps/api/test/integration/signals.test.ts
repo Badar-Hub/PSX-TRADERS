@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { paisa } from '@psx/shared';
 import type { DailyBarsResult, MarketDataProvider, PsxSymbolRecord } from '@psx/data';
 import { createApp } from '../../src/app.js';
+import { auth as authFor, mailer, signUpActive } from '../helpers/account.js';
 import { loadEnv } from '../../src/env.js';
 import { prisma } from '../../src/db/prisma.js';
 import { backfill, coverage, ingestTradingDay } from '../../src/services/ingest.js';
@@ -127,7 +128,7 @@ const days = syntheticDays(SYMBOLS, 230);
 const dayList = [...days.keys()];
 const provider = stubProvider(days);
 
-const app = hasDatabase ? createApp({ env: loadEnv(), logError: () => {} }) : null;
+const app = hasDatabase ? createApp({ env: loadEnv(), logError: () => {}, mailer }) : null;
 
 async function wipe(): Promise<void> {
   await prisma.signalFactor.deleteMany();
@@ -421,11 +422,10 @@ describe.skipIf(!hasDatabase)('signal endpoints', () => {
   let token: string;
 
   beforeAll(async () => {
-    const registered = await request(app!)
-      .post('/api/auth/register')
-      .send({ email: 'signals@example.com', password: 'a-long-enough-password' })
-      .expect(201);
-    token = registered.body.accessToken;
+    // Registering is no longer enough to use the app: the account has to verify
+    // its email and be approved. signUpActive walks both gates.
+    const session = await signUpActive(app!, 'signals@example.com');
+    token = session.accessToken;
   });
 
   const auth = () => ({ authorization: `Bearer ${token}` });
@@ -539,17 +539,14 @@ describe.skipIf(!hasDatabase)('signal endpoints', () => {
   });
 
   it('hides another user portfolio signals', async () => {
-    const other = await request(app!)
-      .post('/api/auth/register')
-      .send({ email: 'other-signals@example.com', password: 'a-long-enough-password' })
-      .expect(201);
+    const other = await signUpActive(app!, 'other-signals@example.com');
 
     const portfolios = await request(app!).get('/api/portfolios').set(auth()).expect(200);
     const portfolioId = portfolios.body.portfolios[0].id;
 
     await request(app!)
       .get(`/api/portfolios/${portfolioId}/signals`)
-      .set({ authorization: `Bearer ${other.body.accessToken}` })
+      .set(authFor(other))
       .expect(404);
   });
 });

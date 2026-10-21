@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { badRequest } from '../http/errors.js';
 import { cuid, isoDate, params, query, validate } from '../http/validate.js';
-import { currentUser, requireUser } from '../auth/middleware.js';
+import { currentUser } from '../auth/middleware.js';
+import { requireActiveUser } from '../auth/access.js';
 import type { Tokens } from '../auth/tokens.js';
 import { getPnlReport } from '../services/reports.js';
 
@@ -32,7 +33,7 @@ export function reportRoutes(tokens: Tokens): Router {
   const router = Router();
   // Per route, not router.use(): mounted at the bare /api prefix, a blanket
   // guard would answer 401 for every unknown /api/... path.
-  const guard = requireUser(tokens);
+  const guard = requireActiveUser(tokens);
 
   /**
    * The profit and loss statement.
@@ -42,7 +43,7 @@ export function reportRoutes(tokens: Tokens): Router {
    */
   router.get(
     '/portfolios/:portfolioId/reports/pnl',
-    guard,
+    ...guard,
     validate({ params: PortfolioParams, query: PnlQuery }),
     async (req, res) => {
       const { portfolioId } = params<z.infer<typeof PortfolioParams>>(req);

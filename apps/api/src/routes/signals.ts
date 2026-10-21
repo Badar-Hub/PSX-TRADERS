@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { notFound } from '../http/errors.js';
 import { cuid, params, query, symbolString, validate } from '../http/validate.js';
-import { requireUser } from '../auth/middleware.js';
+import { requireActiveUser } from '../auth/access.js';
 import type { Tokens } from '../auth/tokens.js';
 import {
   accuracyReport,
@@ -35,12 +35,12 @@ const IdParams = z.object({ id: cuid });
 
 export function signalRoutes(tokens: Tokens): Router {
   const router = Router();
-  const guard = requireUser(tokens);
+  const guard = requireActiveUser(tokens);
 
   /** The stored prediction, or a computed one if none has been stored yet. */
   router.get(
     '/securities/:symbol/signal',
-    guard,
+    ...guard,
     validate({ params: SymbolParams, query: HorizonQuery }),
     async (req, res) => {
       const { symbol } = params<z.infer<typeof SymbolParams>>(req);
@@ -70,7 +70,7 @@ export function signalRoutes(tokens: Tokens): Router {
   /** Forces a recomputation from the latest stored prices. */
   router.post(
     '/securities/:symbol/signal/refresh',
-    guard,
+    ...guard,
     validate({ params: SymbolParams, query: HorizonQuery }),
     async (req, res) => {
       const { symbol } = params<z.infer<typeof SymbolParams>>(req);
@@ -89,7 +89,7 @@ export function signalRoutes(tokens: Tokens): Router {
     },
   );
 
-  router.get('/signals/:id', guard, validate({ params: IdParams }), async (req, res) => {
+  router.get('/signals/:id', ...guard, validate({ params: IdParams }), async (req, res) => {
     const { id } = params<z.infer<typeof IdParams>>(req);
     res.json({ signal: await getSignalById(id) });
   });
@@ -100,7 +100,7 @@ export function signalRoutes(tokens: Tokens): Router {
    * Exposed as a first-class endpoint rather than buried, because a prediction
    * engine that cannot show its hit rate is asking to be trusted on faith.
    */
-  router.get('/signals/stats/accuracy', guard, async (_req, res) => {
+  router.get('/signals/stats/accuracy', ...guard, async (_req, res) => {
     const reports = await accuracyReport();
     res.json({
       accuracy: reports,
@@ -116,7 +116,7 @@ export function signalRoutes(tokens: Tokens): Router {
   /** Signals for every holding in a portfolio, for the dashboard. */
   router.get(
     '/portfolios/:id/signals',
-    guard,
+    ...guard,
     validate({ params: z.object({ id: cuid }), query: HorizonQuery }),
     async (req, res) => {
       const { id } = params<{ id: string }>(req);
@@ -157,7 +157,7 @@ export function signalRoutes(tokens: Tokens): Router {
    */
   router.get(
     '/securities/:symbol/bars',
-    guard,
+    ...guard,
     validate({
       params: SymbolParams,
       query: z.object({ limit: z.coerce.number().int().min(10).max(1000).default(180) }),
@@ -211,7 +211,7 @@ export function signalRoutes(tokens: Tokens): Router {
    * Worth exposing: a prediction built on a series with a three-week hole in it
    * is wrong in a way nothing else would reveal.
    */
-  router.get('/market/coverage', guard, async (_req, res) => {
+  router.get('/market/coverage', ...guard, async (_req, res) => {
     res.json({ coverage: await coverage() });
   });
 

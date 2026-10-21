@@ -6,14 +6,33 @@ import { body, validate } from '../http/validate.js';
 import { prisma } from '../db/prisma.js';
 import { hashPassword, needsRehash, verifyPassword, WeakPasswordError } from '../auth/password.js';
 import { hashRefreshToken, type Tokens } from '../auth/tokens.js';
-import { currentUser, requireUser } from '../auth/middleware.js';
+import { loadAccount, currentAccount } from '../auth/access.js';
+import { currentUser } from '../auth/middleware.js';
+import {
+  configFromEnv,
+  issueVerificationCode,
+  verifyCode,
+  CODE_LENGTH,
+} from '../auth/verification.js';
+import type { Env } from '../env.js';
+import { EmailError, type Mailer } from '../email/mailer.js';
 
 /**
- * Authentication.
+ * Registration, verification and sign-in.
  *
- * Refresh tokens rotate: presenting one invalidates it and issues a new pair.
- * If a stolen token is used, the legitimate user's next refresh fails and the
- * theft surfaces, instead of both parties holding a valid session indefinitely.
+ * Onboarding has two gates and they are independent: the user proves the email
+ * is theirs, then an administrator decides whether to let them in. Tokens are
+ * issued at registration even though the account cannot do anything yet, which
+ * is the one decision here worth explaining.
+ *
+ * The alternative — no tokens until approved — means the sign-up screen has
+ * nothing to poll and the app has to ask for the password again at every step.
+ * Issuing tokens and blocking the routes instead lets the client call
+ * `/auth/me`, read the status, and render "enter your code" or "waiting for
+ * approval" with a specific reason. The token by itself grants nothing: every
+ * other route sits behind `requireActiveUser`, which re-reads the status from
+ * the database on each request, so a rejection takes effect immediately rather
+ * than when the token expires.
  */
 
 const RegisterBody = z.object({
@@ -27,39 +46,86 @@ const LoginBody = z.object({
   password: z.string().min(1).max(1024),
 });
 
-const RefreshBody = z.object({
-  refreshToken: z.string().min(1).max(512),
+const RefreshBody = z.object({ refreshToken: z.string().min(1).max(512) });
+
+const VerifyBody = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  code: z
+    .string()
+    .trim()
+    // Spaces and dashes stripped: people paste "123 456" out of the email.
+    .transform((value) => value.replace(/[\s-]/g, ''))
+    .refine((value) => new RegExp(`^\\d{${CODE_LENGTH}}$`).test(value), {
+      message: `Enter the ${CODE_LENGTH}-digit code from your email`,
+    }),
 });
 
-/**
- * Rate limit on the credential endpoints specifically.
- *
- * Login is where an attacker can make unlimited cheap guesses, and scrypt makes
- * each attempt expensive for the server too, so this protects availability as
- * well as accounts.
- */
-export function authRateLimiter() {
+const ResendBody = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+});
+
+export function authRateLimiter(limit = 20) {
   return rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: 20,
+    limit,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     message: { error: { code: 'RATE_LIMITED', message: 'Too many attempts; try again later' } },
   });
 }
 
-export function authRoutes(tokens: Tokens): Router {
+/**
+ * A tighter limit on the code endpoints.
+ *
+ * Six digits is a million possibilities and each code allows five guesses, so
+ * the per-code budget is the main defence. This bounds the other axis: an
+ * attacker registering many accounts, or hammering one address, to buy more
+ * five-guess budgets.
+ */
+function codeRateLimiter(limit = 10) {
+  return rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: {
+      error: { code: 'RATE_LIMITED', message: 'Too many code attempts; try again later' },
+    },
+  });
+}
+
+export function authRoutes(tokens: Tokens, env: Env, mailer: Mailer): Router {
   const router = Router();
-  const limiter = authRateLimiter();
+  const limiter = authRateLimiter(env.AUTH_RATE_LIMIT);
+  const codeLimiter = codeRateLimiter(env.CODE_RATE_LIMIT);
+  const config = configFromEnv(env);
 
   router.post('/register', limiter, validate({ body: RegisterBody }), async (req, res) => {
     const input = body<z.infer<typeof RegisterBody>>(req);
 
     const existing = await prisma.user.findUnique({
       where: { email: input.email },
-      select: { id: true },
+      select: { id: true, status: true, email: true, name: true },
     });
-    if (existing !== null) throw conflict('An account with that email already exists');
+
+    if (existing !== null) {
+      // An account stuck at PENDING_VERIFICATION is almost always the same
+      // person trying again because the first email never arrived. Re-issuing
+      // the code is far more useful than an error, and reveals nothing a
+      // registration form does not already reveal.
+      if (existing.status === 'PENDING_VERIFICATION') {
+        const { expiresAt } = await issueVerificationCode(existing, config, mailer);
+        res.status(202).json({
+          status: 'PENDING_VERIFICATION',
+          message: 'That email is already registered but not verified. A new code has been sent.',
+          codeExpiresAt: expiresAt.toISOString(),
+          codeLength: CODE_LENGTH,
+        });
+        return;
+      }
+      // Falls through to the conflict below for any other status.
+      throw conflict('An account with that email already exists');
+    }
 
     let passwordHash: string;
     try {
@@ -75,34 +141,137 @@ export function authRoutes(tokens: Tokens): Router {
         passwordHash,
         ...(input.name !== undefined ? { name: input.name } : {}),
       },
-      select: { id: true, email: true, name: true },
+      select: { id: true, email: true, name: true, status: true, role: true },
     });
 
-    // A first portfolio, so the app is usable immediately rather than opening
-    // on an empty state that asks for setup before anything can be recorded.
-    await prisma.portfolio.create({
-      data: { userId: user.id, name: 'Main' },
-    });
+    // The first portfolio is created now rather than on approval, so an
+    // approved account opens on a usable app instead of a setup step.
+    await prisma.portfolio.create({ data: { userId: user.id, name: 'Main' } });
 
     const pair = await issueTokenPair(tokens, user, req.header('user-agent'));
-    res.status(201).json({ user, ...pair });
+
+    /*
+     * The account exists from here on, whatever happens to the email.
+     *
+     * A mail server being briefly unreachable should not throw away a
+     * perfectly good registration, and it must not surface as "something went
+     * wrong" either — the caller would have no idea an account had been
+     * created, or that pressing resend is the way out. So the failure is
+     * reported specifically, with the tokens still issued so the client can
+     * land on the verify screen and use its resend button.
+     */
+    try {
+      const { expiresAt } = await issueVerificationCode(user, config, mailer);
+      res.status(201).json({
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          status: user.status,
+          role: user.role,
+        },
+        ...pair,
+        codeExpiresAt: expiresAt.toISOString(),
+        codeLength: CODE_LENGTH,
+        next: 'VERIFY_EMAIL',
+      });
+    } catch (error) {
+      if (!(error instanceof EmailError)) throw error;
+      console.error('[auth] account created but the code could not be sent:', error.message);
+      res.status(201).json({
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          status: user.status,
+          role: user.role,
+        },
+        ...pair,
+        codeLength: CODE_LENGTH,
+        next: 'VERIFY_EMAIL',
+        warning: {
+          code: 'EMAIL_SEND_FAILED',
+          message:
+            'Your account was created, but the verification email could not be sent just now. ' +
+            'Use "resend code" in a moment.',
+        },
+      });
+    }
+  });
+
+  router.post('/verify-email', codeLimiter, validate({ body: VerifyBody }), async (req, res) => {
+    const input = body<z.infer<typeof VerifyBody>>(req);
+    const outcome = await verifyCode(input.email, input.code, config, mailer, env.APP_URL);
+
+    if (!outcome.ok) {
+      const messages: Record<typeof outcome.reason, string> = {
+        NO_CODE: 'That code is not valid. Request a new one.',
+        EXPIRED: `That code has expired. Codes last ${config.ttlMinutes} minutes — request a new one.`,
+        SUPERSEDED:
+          'That code was replaced when a new one was sent. Use the code from the most ' +
+          'recent email.',
+        WRONG_CODE:
+          outcome.attemptsLeft > 0
+            ? `That code is not correct. ${outcome.attemptsLeft} attempt${outcome.attemptsLeft === 1 ? '' : 's'} left.`
+            : 'That code is not correct, and no attempts are left. Request a new one.',
+        TOO_MANY_ATTEMPTS: 'Too many incorrect attempts. Request a new code.',
+      };
+
+      res.status(400).json({
+        error: {
+          code: outcome.reason,
+          message: messages[outcome.reason],
+          details: { attemptsLeft: outcome.attemptsLeft },
+        },
+      });
+      return;
+    }
+
+    res.json({
+      status: outcome.user.status,
+      next: 'AWAITING_APPROVAL',
+      message:
+        'Your email is verified. An administrator now has to approve your account; ' +
+        'you will be emailed when that happens.',
+    });
+  });
+
+  router.post('/resend-code', codeLimiter, validate({ body: ResendBody }), async (req, res) => {
+    const input = body<z.infer<typeof ResendBody>>(req);
+
+    const user = await prisma.user.findUnique({
+      where: { email: input.email },
+      select: { id: true, email: true, name: true, status: true },
+    });
+
+    // Always the same answer, whether or not that address has a pending
+    // account. Otherwise this endpoint tells anyone who asks which addresses
+    // are registered.
+    const generic = {
+      message: 'If that address has an account awaiting verification, a new code has been sent.',
+      codeLength: CODE_LENGTH,
+    };
+
+    if (user === null || user.status !== 'PENDING_VERIFICATION') {
+      res.status(202).json(generic);
+      return;
+    }
+
+    const { expiresAt } = await issueVerificationCode(user, config, mailer);
+    res.status(202).json({ ...generic, codeExpiresAt: expiresAt.toISOString() });
   });
 
   router.post('/login', limiter, validate({ body: LoginBody }), async (req, res) => {
     const input = body<z.infer<typeof LoginBody>>(req);
-
     const user = await prisma.user.findUnique({ where: { email: input.email } });
 
-    // The same message and a real hash comparison either way, so a response
-    // does not reveal whether an email is registered, by content or by timing.
     const storedHash =
       user?.passwordHash ??
-      'scrypt$131072$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+      'scrypt$65536$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
     const ok = await verifyPassword(input.password, storedHash);
 
     if (user === null || !ok) throw unauthorized('Email or password is incorrect');
 
-    // Transparently upgrade a hash made with weaker parameters.
     if (needsRehash(user.passwordHash)) {
       const upgraded = await hashPassword(input.password);
       await prisma.user.update({ where: { id: user.id }, data: { passwordHash: upgraded } });
@@ -113,9 +282,28 @@ export function authRoutes(tokens: Tokens): Router {
       { id: user.id, email: user.email },
       req.header('user-agent'),
     );
+
+    // Signing in succeeds for an unapproved account, and the response says so.
+    // Refusing the password would leave the client unable to tell a wrong
+    // password from a pending account, and the user re-typing a password that
+    // was never the problem.
     res.json({
-      user: { id: user.id, email: user.email, name: user.name },
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        status: user.status,
+        role: user.role,
+      },
       ...pair,
+      next:
+        user.status === 'ACTIVE'
+          ? 'READY'
+          : user.status === 'PENDING_VERIFICATION'
+            ? 'VERIFY_EMAIL'
+            : user.status === 'PENDING_APPROVAL'
+              ? 'AWAITING_APPROVAL'
+              : 'BLOCKED',
     });
   });
 
@@ -125,13 +313,13 @@ export function authRoutes(tokens: Tokens): Router {
 
     const stored = await prisma.refreshToken.findUnique({
       where: { tokenHash },
-      include: { user: { select: { id: true, email: true, name: true } } },
+      include: {
+        user: { select: { id: true, email: true, name: true, status: true, role: true } },
+      },
     });
 
     if (stored === null) throw unauthorized('Refresh token is not valid');
     if (stored.revokedAt !== null) {
-      // A revoked token being presented again means it was captured, or the
-      // client is replaying. Either way every session for the user is dropped.
       await prisma.refreshToken.updateMany({
         where: { userId: stored.userId, revokedAt: null },
         data: { revokedAt: new Date() },
@@ -142,7 +330,6 @@ export function authRoutes(tokens: Tokens): Router {
       throw unauthorized('Refresh token has expired; sign in again');
     }
 
-    // Rotation: the presented token dies as the new one is issued.
     await prisma.refreshToken.update({
       where: { id: stored.id },
       data: { revokedAt: new Date() },
@@ -158,19 +345,39 @@ export function authRoutes(tokens: Tokens): Router {
       where: { tokenHash: hashRefreshToken(refreshToken), revokedAt: null },
       data: { revokedAt: new Date() },
     });
-    // Always 204: whether that token existed is not the caller's business, and
-    // logging out should never fail.
     res.status(204).end();
   });
 
-  router.get('/me', requireUser(tokens), async (req, res) => {
+  /**
+   * Readable by any signed-in account, whatever its status.
+   *
+   * This is the endpoint the sign-up screens poll, so it must work precisely
+   * when the rest of the API is closed to the caller.
+   */
+  router.get('/me', ...loadAccount(tokens), async (req, res) => {
     const { id } = currentUser(req);
-    const user = await prisma.user.findUnique({
-      where: { id },
-      select: { id: true, email: true, name: true, isTaxFiler: true, timezone: true, createdAt: true },
+    const account = currentAccount(req);
+
+    res.json({
+      user: {
+        id,
+        email: account.email,
+        name: account.name,
+        status: account.status,
+        role: account.role,
+        emailVerifiedAt: account.emailVerifiedAt?.toISOString() ?? null,
+        approvedAt: account.approvedAt?.toISOString() ?? null,
+        decisionNote: account.decisionNote,
+      },
+      next:
+        account.status === 'ACTIVE'
+          ? 'READY'
+          : account.status === 'PENDING_VERIFICATION'
+            ? 'VERIFY_EMAIL'
+            : account.status === 'PENDING_APPROVAL'
+              ? 'AWAITING_APPROVAL'
+              : 'BLOCKED',
     });
-    if (user === null) throw unauthorized('Account no longer exists');
-    res.json({ user });
   });
 
   return router;
