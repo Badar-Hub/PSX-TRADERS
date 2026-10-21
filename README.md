@@ -314,6 +314,41 @@ agreed. It is explicitly not a probability of being right — `settleSignal`
 scores past predictions against what happened, and that is the only honest
 source of a hit rate.
 
+### What the LLM costs
+
+**Today: nothing.** `ANTHROPIC_API_KEY` is empty and nothing calls the API —
+`summarise()` writes every explanation deterministically. The LLM pass is an
+enhancement you can switch on, not a dependency.
+
+Measured with `pnpm --filter @psx/engine narrative-cost`, which builds the real
+prompt for every fixture symbol on both horizons:
+
+```
+input per narrative    727 tokens   (199 system + 528 factor table)
+output per narrative   ~165 tokens
+```
+
+Monthly, at 30 days:
+
+| Narratives/month | Haiku 5.5 | Sonnet 5.5 | Opus 5.5 |
+| --- | --- | --- | --- |
+| 600 — lazy, ~20 views/day | $0.05 | $0.93 | $1.86 |
+| 1,800 — 30-symbol watchlist nightly | $0.14 | $2.79 | $5.59 |
+| 13,200 — all 440 signals nightly | $1.02 | $20.49 | $40.97 |
+
+Batched (50% off, results within 24h), which suits a nightly job exactly.
+
+**Cost does not scale with users.** Signals and their narratives are stored per
+*security*, not per user — one row serves everybody. Covering the whole
+tradeable PSX costs about **$1/month on Haiku batched** whether one person
+reads it or ten thousand do. The per-user cost of this feature is effectively
+zero; what scales is symbol coverage.
+
+**Prompt caching does not help here**, which is worth knowing before reaching
+for it. The shared prefix is only the 199-token system prompt, below the
+512–4096-token minimum cacheable prefix, and the factor table that varies per
+call is 73% of the input anyway.
+
 ### Narratives
 
 `summarise()` writes the explanation deterministically from the factor table:

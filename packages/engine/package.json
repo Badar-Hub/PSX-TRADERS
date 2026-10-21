@@ -16,7 +16,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "fixture:fetch": "tsx scripts/fetch-fixture.ts",
-    "explain": "tsx scripts/explain.ts"
+    "explain": "tsx scripts/explain.ts",
+    "narrative-cost": "tsx scripts/narrative-cost.ts"
   },
   "dependencies": {
     "@psx/shared": "workspace:*"
