@@ -19,12 +19,19 @@ Built for personal use first, with a path to a commercial product.
 | `@psx/ledger` — tax lots, FIFO, cycles, buy-backs, P&L | done, 76 tests |
 | Database schema (19 tables) | done, migrated |
 | Express API — auth, portfolios, trades, positions, P&L | done, 136 tests |
-| `@psx/engine` — indicators, candles, factor scoring | next |
+| `@psx/engine` — indicators, candles, explainable scoring | done, 180 tests |
+| Signal endpoints and nightly ingest job | next |
 | Next.js dashboard | not started |
 | Expo mobile app | not started |
 
-274 tests, all passing. `pnpm test` runs them all. The 38 API integration tests
+454 tests, all passing. `pnpm test` runs them all. The 38 API integration tests
 need a database and skip with a note when there isn't one.
+
+To see a prediction and its reasoning:
+
+```bash
+pnpm --filter @psx/engine explain PRL swing
+```
 
 ## API
 
@@ -100,7 +107,7 @@ packages/
   shared     Money (integer paisa), dates, charge schedules, domain types. No I/O.
   psx        PSX Data Portal provider, file parsers, corporate-action detection.
   ledger     Tax lots, FIFO matching, position cycles, buy-backs, P&L. No I/O.
-  engine     (next) Indicators, candle patterns, factor scoring. Pure functions.
+  engine     Indicators, candle patterns, explainable factor scoring. No I/O.
 apps/
   api        Prisma schema; Express routes next.
   web        (later) Next.js dashboard.
@@ -168,6 +175,88 @@ well as full exits:
 
 > Sold ABL at 130.00, bought back at 110.00 after 31 days: 2,000.00 better off
 > on 100 shares.
+
+## Predictions
+
+Every prediction is a weighted sum of factors, and **each factor explains
+itself**. The score and its explanation are produced by the same code from the
+same numbers, so they cannot drift apart — which is what a narrative written
+separately from the scoring eventually does.
+
+```
+factor                             observed           score  weight  contrib
+----------------------------------------------------------------------------
+Moving average alignment           20 > 50 > 200         85   12.8%     10.8
+Candlestick patterns               Bearish engulfing   -100   10.6%    -10.6
+MACD                               above signal          72   12.8%      9.2
+RSI (14)                           RSI 57.0             -31   10.6%     -3.3
+Volume against average             1.7x average         -30    9.6%     -2.9
+Trend strength                     ADX 30                26   10.6%      2.8
+...
+                                              PRL: +7.7, HOLD, confidence 58%
+```
+
+Each factor carries the bars it fired on, so tapping one highlights exactly the
+candles behind it.
+
+### What makes it more than a shape matcher
+
+**Candlestick patterns require context.** A hammer is a reversal at the bottom
+of a decline; the same shape partway up a rally is a day with a long lower
+wick. Every reversal pattern checks the trend it claims to reverse and stays
+silent without it — which is why the engine fires on under 45% of days rather
+than constantly. Strength is graded too: a body that engulfs the previous one
+by a hair scores lower than one that swallows it whole.
+
+**Missing data is not a neutral vote.** A factor with no data returns null, not
+zero. Scoring zero would claim "neutral evidence"; null says "no evidence",
+which is the truth when a company has no published earnings. Weights are
+renormalised over the factors that reported, so a stock without fundamentals
+gets a real answer from its price data instead of being dragged towards HOLD by
+seven silent zeros. The cost is that such a signal is thinner than it looks,
+so `missingFactors` and a coverage term in the confidence figure say how much.
+
+**The engine refuses rather than guesses.** Under 30 sessions of history, or a
+stock that traded on fewer than half of the last 20 sessions, returns a refusal
+with a reason. On this exchange that matters: several hundred listings go days
+without a trade, and indicators computed across those gaps describe the gaps. A
+system that always produces an answer teaches you to ignore it.
+
+**The two horizons genuinely differ.** Swing weights momentum, volume and
+patterns; long term weights earnings, valuation and leverage. Same factors,
+different lens, and a stock with a strong chart and poor accounts scores
+differently on the two.
+
+**Confidence measures the evidence, not the odds.** It is coverage times
+agreement: how much of the model had data, and how closely those factors
+agreed. It is explicitly not a probability of being right — `settleSignal`
+scores past predictions against what happened, and that is the only honest
+source of a hit rate.
+
+### Narratives
+
+`summarise()` writes the explanation deterministically from the factor table:
+no API, no cost, no network. An LLM pass is an enhancement on top, and
+`validateNarrative()` checks the result before it is stored — rejecting prose
+that contradicts the score, invents a price target, or tells the reader what to
+do. A failed or unavailable generation falls back to the deterministic text, so
+an explanation is never missing.
+
+That last rule is not only about quality. Telling someone to buy something is
+investment advice, which has licensing implications in Pakistan; describing
+what an analysis shows does not.
+
+### Still missing
+
+- **Fundamentals have no source**, so long-term signals currently run on price
+  data alone with seven factors reporting as missing. The schema and the
+  factors are ready for them.
+- **No index series**, so relative strength never reports. The KSE-100 is not
+  in the daily OHLCV file and needs a separate source.
+- **The weights are a considered prior, not a fitted model.** They were chosen
+  from what each factor measures. Fitting them is what the prediction-outcome
+  tracking is for: once a few hundred signals have been settled, the per-factor
+  hit rate is evidence and these numbers can be revised against it.
 
 ## Market data
 
