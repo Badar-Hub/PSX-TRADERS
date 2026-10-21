@@ -1,0 +1,9 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# esbuild ships a prebuilt binary via its install script; vitest needs it.
+# Approving it explicitly keeps every other package's lifecycle scripts blocked,
+# which is the behaviour worth having in a repo that will grow dependencies.
+allowBuilds:
+  esbuild: true

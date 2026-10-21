@@ -1,0 +1,33 @@
+# Local infra only. Ports are offset from the defaults so this never
+# collides with another Postgres/Redis already running on the machine.
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: psx-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: psx
+      POSTGRES_PASSWORD: psx
+      POSTGRES_DB: psx_trader
+    ports:
+      - "5433:5432"
+    volumes:
+      - psx-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U psx -d psx_trader"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: psx-redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    volumes:
+      - psx-redisdata:/data
+
+volumes:
+  psx-pgdata:
+  psx-redisdata:

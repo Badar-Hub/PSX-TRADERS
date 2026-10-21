@@ -1,0 +1,7 @@
+# Normalise source to LF in the repository.
+* text=auto eol=lf
+
+# Exchange fixtures must survive byte-for-byte. The symbol master is UTF-16BE
+# and the price-band export uses bare CR line endings; letting git normalise
+# either one corrupts the file and the parser tests stop testing reality.
+packages/psx/test/fixtures/** -text -diff
