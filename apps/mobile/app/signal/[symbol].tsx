@@ -170,6 +170,16 @@ export default function SignalScreen(): React.ReactNode {
               <Card>
                 <SectionTitle hint="Written from the factors below">In short</SectionTitle>
                 <Text style={styles.narrative}>{prediction.narrative}</Text>
+                {/*
+                  Who wrote this. A reader deciding what to do with their money
+                  is entitled to know whether a language model produced the
+                  explanation, and the factor table is authoritative either way.
+                */}
+                <Text style={styles.attribution}>
+                  {prediction.narrativeModel === null
+                    ? 'Written by the app itself from the factors below, with no language model involved.'
+                    : `Written by ${prediction.narrativeModel} from the factors below. The factors are the source; this is a rendering of them.`}
+                </Text>
               </Card>
             ) : null}
 
@@ -247,6 +257,7 @@ const styles = StyleSheet.create({
   meta: { marginTop: space.md },
   caveat: { color: colors.warn, fontSize: 11, lineHeight: 17, marginTop: space.md },
   narrative: { color: colors.text, fontSize: 14, lineHeight: 22 },
+  attribution: { color: colors.textFaint, fontSize: 11, lineHeight: 17, marginTop: space.sm },
   refusal: { color: colors.textMuted, fontSize: 13, lineHeight: 20 },
   footer: {
     color: colors.textFaint,

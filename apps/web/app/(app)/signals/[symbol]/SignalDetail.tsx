@@ -103,9 +103,22 @@ export function SignalDetail({
               </div>
 
               {active.signal.narrative !== null && (
-                <p className="mt-4 max-w-2xl text-sm leading-relaxed text-slate-300">
-                  {active.signal.narrative}
-                </p>
+                <div className="mt-4 max-w-2xl">
+                  <p className="text-sm leading-relaxed text-slate-300">
+                    {active.signal.narrative}
+                  </p>
+                  {/*
+                    Who wrote this. A reader deciding what to do with their
+                    money is entitled to know whether a language model produced
+                    the explanation, and the factor table below is the thing
+                    that is actually authoritative either way.
+                  */}
+                  <p className="mt-2 text-xs text-slate-600">
+                    {active.signal.narrativeModel === null
+                      ? 'Written from the factor table below by the app itself, with no language model involved.'
+                      : `Written by ${active.signal.narrativeModel} from the factor table below. The table is the source; this paragraph is a rendering of it.`}
+                  </p>
+                </div>
               )}
             </div>
 

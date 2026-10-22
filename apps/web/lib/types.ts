@@ -159,6 +159,12 @@ export interface Signal {
   confidence: number;
   missingFactors: number;
   narrative: string | null;
+  /**
+   * The model that wrote the prose, or null when the deterministic summariser
+   * did. Shown, not hidden: a reader deciding what to do with their money is
+   * entitled to know whether a language model wrote the explanation.
+   */
+  narrativeModel: string | null;
   priceAtSignal: number | null;
   engineVersion: string;
   outcome: string;
