@@ -42,8 +42,14 @@ export default async function SignalPage({
   return (
     <div className="space-y-6">
       <div>
-        <Link href="/" className="text-xs text-slate-500 hover:text-slate-300">
-          ← Positions
+        {/*
+          Points at the predictions list rather than the dashboard, and is
+          labelled for where it goes. This read "← Positions" when a prediction
+          could only be opened from the positions table; it is now reached from
+          four places, and naming one of them was wrong from three of them.
+        */}
+        <Link href="/predictions" className="text-xs text-slate-500 hover:text-slate-300">
+          ← All predictions
         </Link>
         <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-100">{symbol}</h1>
