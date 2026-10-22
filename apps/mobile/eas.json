@@ -1,0 +1,28 @@
+{
+  "//": "Build profiles for EAS Build. See the note in README-ish form below.",
+  "cli": {
+    "version": ">= 5.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "//": "A dev client: like Expo Go but with this app's own native modules compiled in. Needed only if a dependency stops working in Expo Go.",
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "//": "The one to use. Produces a plain .apk you download and install by tapping it, with no Play Store and no signing ceremony. Android only; iOS device builds need a paid Apple Developer account.",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production": {
+      "//": "An .aab for the Play Store. Not needed until you actually publish.",
+      "autoIncrement": true
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
