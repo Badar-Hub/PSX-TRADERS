@@ -10,16 +10,17 @@ import {
   signedRupees,
   toneFor,
 } from '@/lib/format';
-import type { MarketStatus, PortfolioSummary, Signal } from '@/lib/types';
+import type { PortfolioSummary, Signal } from '@/lib/types';
+import type { ChartBar } from '@/components/PriceChart';
 import { Stat } from '@/components/Stat';
 import { SignalBadge } from '@/components/SignalBadge';
 import { PortfolioPicker } from './PortfolioPicker';
-import { MarketPanel } from './MarketPanel';
+import { HoldingChart } from './HoldingChart';
 
 export default async function PositionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ portfolio?: string }>;
+  searchParams: Promise<{ portfolio?: string; chart?: string }>;
 }) {
   const params = await searchParams;
   const { portfolios, active } = await resolveActivePortfolio(params.portfolio);
@@ -37,15 +38,37 @@ export default async function PositionsPage({
 
   // Positions and signals in parallel: neither depends on the other, and the
   // signal lookup is the slower of the two.
-  const [summary, signalsResponse, market] = await Promise.all([
+  const [summary, signalsResponse] = await Promise.all([
     api<PortfolioSummary>(`/api/portfolios/${active.id}/positions`),
     api<{ signals: Array<{ symbol: string; signal: Signal | null }> }>(
       `/api/portfolios/${active.id}/signals?horizon=SWING`,
     ).catch(() => ({ signals: [] })),
-    // The market panel is context, not the point of the page, so a failure
-    // here must not take the portfolio down with it.
-    api<MarketStatus>('/api/market/status?days=180').catch(() => null),
   ]);
+
+  /*
+   * The charted holding, and its history.
+   *
+   * Sequential rather than alongside the fetches above, because which symbol
+   * to chart is not known until the positions are in: the default is the
+   * largest holding, which is the one most worth looking at unprompted.
+   */
+  const held = summary.positions.filter((position) => position.quantity > 0);
+  const requested = params.chart?.toUpperCase();
+  const charted =
+    held.find((position) => position.symbol === requested) ??
+    // Largest by market value, falling back to cost where a price is missing,
+    // so a holding with no recent close still orders sensibly.
+    [...held].sort(
+      (a, b) => (b.marketValue ?? b.costBasis) - (a.marketValue ?? a.costBasis),
+    )[0] ??
+    null;
+
+  const history =
+    charted === null
+      ? null
+      : await api<{ symbol: string; name: string; bars: ChartBar[] }>(
+          `/api/securities/${charted.symbol}/bars?limit=180`,
+        ).catch(() => ({ symbol: charted.symbol, name: charted.name, bars: [] as ChartBar[] }));
 
   const signalBySymbol = new Map(
     signalsResponse.signals.map((entry) => [entry.symbol, entry.signal]),
@@ -73,7 +96,20 @@ export default async function PositionsPage({
         </div>
       </div>
 
-      {market !== null && <MarketPanel status={market} />}
+      {charted !== null && history !== null && (
+        <HoldingChart
+          holdings={held.map((position) => ({
+            symbol: position.symbol,
+            quantity: position.quantity,
+            marketValue: position.marketValue,
+            unrealisedPnl: position.unrealisedPnl,
+            unrealisedPnlBps: position.unrealisedPnlBps,
+          }))}
+          selected={charted.symbol}
+          bars={history.bars}
+          name={history.name}
+        />
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Market value" value={rupees(summary.marketValue)} />

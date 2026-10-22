@@ -5,6 +5,17 @@ import { MarketChart } from '@/components/MarketChart';
 /**
  * Where the market is, above the user's own positions.
  *
+ * NOT CURRENTLY RENDERED. The dashboard shows a chart of the user's own
+ * holdings instead — see HoldingChart — because this panel's index is the
+ * app's own equal-weighted construction and not the KSE-100, which the
+ * exchange's bulk archive does not publish. The owner would rather see nothing
+ * than a points figure that could be mistaken for a KSE-100 quote.
+ *
+ * Kept, not deleted: the moment an index feed is licensed (from PSX directly
+ * or through a redistributor), this panel and /api/market/status are what it
+ * plugs into. The service, the endpoint and its tests are all still live, and
+ * the mobile market tab still uses them.
+ *
  * It leads with the day's move in points, because that is the number a
  * Pakistani trader asks for first — but the heading says plainly that it is
  * this app's own index and not the KSE-100, and the basis sentence is there to
