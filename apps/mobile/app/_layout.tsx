@@ -32,10 +32,14 @@ function Gate(): React.ReactNode {
     if (loading) return;
 
     const inAuth = group === '(auth)';
-    // The signal, trade and admin screens sit outside the tab group so they can
-    // be pushed over it; they still belong to the signed-in half of the app.
+    // The signal, trade, stop and admin screens sit outside the tab group so
+    // they can be pushed over it; they still belong to the signed-in half.
     const inApp =
-      group === '(app)' || group === 'signal' || group === 'trade' || group === 'admin';
+      group === '(app)' ||
+      group === 'signal' ||
+      group === 'trade' ||
+      group === 'stop' ||
+      group === 'admin';
 
     if (account === null) {
       if (!inAuth) router.replace('/(auth)/sign-in');
@@ -82,6 +86,7 @@ function Gate(): React.ReactNode {
       <Stack.Screen name="(app)" options={{ headerShown: false }} />
       <Stack.Screen name="signal/[symbol]" options={{ title: 'Prediction' }} />
       <Stack.Screen name="trade/new" options={{ presentation: 'modal', title: 'Record a trade' }} />
+      <Stack.Screen name="stop/new" options={{ presentation: 'modal', title: 'Watch a symbol' }} />
       <Stack.Screen name="admin/users" options={{ title: 'Approval queue' }} />
     </Stack>
   );

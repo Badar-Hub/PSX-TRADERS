@@ -10,6 +10,7 @@ import { authRoutes } from './routes/auth.js';
 import { portfolioRoutes } from './routes/portfolios.js';
 import { reportRoutes } from './routes/reports.js';
 import { signalRoutes } from './routes/signals.js';
+import { stopRoutes } from './routes/stops.js';
 import { tradeRoutes } from './routes/trades.js';
 import type { Env } from './env.js';
 import { prisma } from './db/prisma.js';
@@ -96,6 +97,7 @@ export function createApp(options: AppOptions): Express {
   app.use('/api', tradeRoutes(tokens));
   app.use('/api', reportRoutes(tokens));
   app.use('/api', signalRoutes(tokens));
+  app.use('/api', stopRoutes(tokens));
 
   app.use(notFoundHandler);
   app.use(errorHandler(options.logError !== undefined ? { log: options.logError } : {}));

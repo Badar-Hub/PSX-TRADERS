@@ -7,3 +7,4 @@ export * from './weights.js';
 export * from './scoring.js';
 export * from './narrative.js';
 export * from './adapt.js';
+export * from './stops.js';

@@ -289,3 +289,63 @@ export interface AdminUsersResponse {
   /** Account counts by status, for the queue's tabs. */
   counts: Partial<Record<UserStatus, number>>;
 }
+
+export type RuleStatus = 'ARMED' | 'TRIGGERED' | 'CANCELLED' | 'EXPIRED';
+export type RuleTrigger = 'CLOSE' | 'INTRADAY_LOW' | 'INTRADAY_HIGH';
+export type StopType = 'STOP_LOSS' | 'TRAILING_STOP' | 'TAKE_PROFIT';
+
+export interface StopEvent {
+  id: string;
+  triggeredOn: string;
+  triggerPrice: number;
+  stopAtTrigger: number | null;
+  highWaterMark: number | null;
+  message: string;
+  acknowledgedAt: string | null;
+}
+
+export interface StopRule {
+  id: string;
+  symbol: string;
+  securityName: string;
+  type: string;
+  status: RuleStatus;
+  triggerOn: RuleTrigger;
+  thresholdPrice: number | null;
+  trailAmount: number | null;
+  trailBps: number | null;
+  highWaterMark: number | null;
+  effectiveStop: number | null;
+  quantity: number | null;
+  note: string | null;
+  armedAt: string;
+  expiresAt: string | null;
+  lastCheckedOn: string | null;
+  marketPrice: number | null;
+  priceAsOf: string | null;
+  /** Basis points of headroom above the level; negative means already through. */
+  headroomBps: number | null;
+  valueAtStop: number | null;
+  sharesHeld: number | null;
+  events: StopEvent[];
+}
+
+export interface StopSuggestion {
+  symbol: string;
+  marketPrice: number;
+  priceAsOf: string;
+  atr: number | null;
+  trailBps: number | null;
+  suggestedStop: number | null;
+  multiple: number;
+  reason: string;
+}
+
+export interface StopEvaluation {
+  rulesChecked: number;
+  triggered: number;
+  moved: number;
+  expired: number;
+  skipped: number;
+  notes: string[];
+}

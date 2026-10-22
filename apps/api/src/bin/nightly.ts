@@ -1,9 +1,15 @@
 /**
  * The nightly job.
  *
- * Three steps in order, because each depends on the one before: ingest the
- * day's prices, recompute signals from the new history, then settle any
- * prediction whose horizon has now elapsed.
+ * Four steps in order, because each depends on the one before: ingest the
+ * day's prices, check the armed stop rules against them, recompute signals
+ * from the new history, then settle any prediction whose horizon has now
+ * elapsed.
+ *
+ * Stops come before signals deliberately. A breached stop is the only thing
+ * here the user may need to act on tomorrow morning, so it is evaluated while
+ * the run is certain to get that far, rather than after a few hundred symbols
+ * of scoring that could time out or fail.
  *
  *   pnpm --filter @psx/api nightly
  *
@@ -18,6 +24,7 @@
 
 import { ingestLatest } from '../services/ingest.js';
 import { refreshSignals, settleDueSignals } from '../services/signals.js';
+import { evaluateArmedRules } from '../services/stops.js';
 import { loadEnv } from '../env.js';
 import { prisma } from '../db/prisma.js';
 
@@ -51,7 +58,24 @@ async function main(): Promise<void> {
     );
   }
 
-  // 2. Signals, only if there is new price data to compute them from.
+  /*
+   * 2. Stops.
+   *
+   * Run whatever the ingest did. The evaluator replays from each rule's own
+   * `lastCheckedOn`, so a day the ingest failed is caught up on the next run
+   * rather than skipped — and a stop breached while the job was down is still
+   * reported, with that day's numbers.
+   */
+  const stops = await evaluateArmedRules();
+  console.log(
+    `[nightly] stops: ${stops.rulesChecked} checked, ${stops.triggered} triggered, ` +
+      `${stops.moved} trailed up, ${stops.expired} expired, ${stops.skipped} skipped`,
+  );
+  for (const note of stops.notes) {
+    console.log(`[nightly]   ${note}`);
+  }
+
+  // 3. Signals, only if there is new price data to compute them from.
   if (ingest.status === 'SUCCESS') {
     const refresh = await refreshSignals();
     console.log(
@@ -69,7 +93,7 @@ async function main(): Promise<void> {
     console.log('[nightly] skipping signals: no new prices');
   }
 
-  // 3. Judge the predictions whose time is up.
+  // 4. Judge the predictions whose time is up.
   const settled = await settleDueSignals();
   console.log(
     `[nightly] settled ${settled.settled}: ${settled.hits} hit, ${settled.misses} missed, ` +

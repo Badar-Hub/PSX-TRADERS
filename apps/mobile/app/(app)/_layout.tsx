@@ -32,6 +32,15 @@ export default function AppLayout(): React.ReactNode {
         }}
       />
       <Tabs.Screen
+        name="stops"
+        options={{
+          title: 'Stops',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="shield-checkmark" color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="market"
         options={{
           title: 'Market',

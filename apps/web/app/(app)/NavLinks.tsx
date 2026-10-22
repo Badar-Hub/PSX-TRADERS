@@ -6,6 +6,7 @@ import { usePathname, useSearchParams } from 'next/navigation';
 const LINKS = [
   { href: '/', label: 'Positions' },
   { href: '/trades', label: 'Trades' },
+  { href: '/stops', label: 'Stops' },
   { href: '/reports', label: 'P&L' },
   { href: '/market', label: 'Market' },
 ];
