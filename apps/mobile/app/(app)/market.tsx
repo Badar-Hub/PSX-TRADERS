@@ -9,11 +9,12 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Banner, Button, Card, Field, Loading, Row, SectionTitle, Stat } from '@/components/ui';
-import { IndexChart } from '@/components/IndexChart';
+import { HoldingCard } from '@/components/HoldingCard';
+import { usePortfolio } from '@/lib/portfolio';
 import { useFetch } from '@/lib/useFetch';
-import { percent, rupeesCompact, shares, shortDate } from '@/lib/format';
-import { colors, space, toneFor } from '@/lib/theme';
-import type { AccuracyReport, Coverage, MarketStatus } from '@/lib/types';
+import { percent, shares, shortDate } from '@/lib/format';
+import { colors, space } from '@/lib/theme';
+import type { AccuracyReport, Coverage, PortfolioSummary } from '@/lib/types';
 
 /**
  * What the engine is working from, and how it has been doing.
@@ -27,7 +28,10 @@ export default function Market(): React.ReactNode {
   const [symbol, setSymbol] = useState('');
 
   const { width } = useWindowDimensions();
-  const status = useFetch<MarketStatus>('/api/market/status?days=120');
+  const { active } = usePortfolio();
+  const positions = useFetch<PortfolioSummary>(
+    active !== null ? `/api/portfolios/${active.id}/positions` : null,
+  );
   const coverage = useFetch<{ coverage: Coverage }>('/api/market/coverage');
   const accuracy = useFetch<{ accuracy: AccuracyReport[]; note: string }>(
     '/api/signals/stats/accuracy',
@@ -53,7 +57,7 @@ export default function Market(): React.ReactNode {
         <RefreshControl
           refreshing={coverage.refreshing}
           onRefresh={() => {
-            status.reload();
+            positions.reload();
             coverage.reload();
             accuracy.reload();
           }}
@@ -64,11 +68,14 @@ export default function Market(): React.ReactNode {
       {coverage.error !== null ? <Banner kind="error">{coverage.error}</Banner> : null}
 
       {/*
-        The market first: on a phone this screen is what gets opened to answer
-        "what's the market doing", and that should not be below a search box.
+        Holdings first: on a phone this screen is what gets opened to answer
+        "how are my stocks doing", and that should not be below a search box.
       */}
-      {status.data?.latest != null ? (
-        <MarketCard status={status.data} width={width - space.lg * 2 - space.lg * 2} />
+      {positions.data != null ? (
+        <HoldingCard
+          positions={positions.data.positions}
+          width={width - space.lg * 2 - space.lg * 2}
+        />
       ) : null}
 
       <Card>
@@ -136,86 +143,8 @@ export default function Market(): React.ReactNode {
   );
 }
 
-/**
- * Where the market is, in points.
- *
- * The heading says whose index this is. PSX's bulk archive publishes no
- * KSE-100 level, so a number that looked like a KSE-100 quote and was not one
- * would be the most misleading thing on the screen — and the median beside the
- * mean is what stops "market up" being read as "my stocks up".
- */
-function MarketCard({ status, width }: { status: MarketStatus; width: number }): React.ReactNode {
-  const latest = status.latest;
-  if (latest === null) return null;
-
-  const first = status.series[0];
-  const windowBps =
-    first === undefined || first.level === 0
-      ? null
-      : Math.round((latest.level / first.level - 1) * 10_000);
-
-  return (
-    <Card>
-      {/* "Index", not "Market": the screen header already says Market, and two
-          of the same word stacked reads like a rendering bug. */}
-      <SectionTitle hint="This app's own index of liquid PSX shares, not the KSE-100">
-        Index
-      </SectionTitle>
-
-      <View style={styles.marketHead}>
-        <View>
-          <Text style={styles.level}>
-            {latest.level.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-          </Text>
-          <Text style={[styles.change, { color: toneFor(latest.change) }]}>
-            {latest.change > 0 ? '+' : latest.change < 0 ? '−' : ''}
-            {Math.abs(latest.change).toFixed(2)} pts (
-            {latest.changeBps > 0 ? '+' : latest.changeBps < 0 ? '−' : ''}
-            {Math.abs(latest.changeBps / 100).toFixed(2)}%)
-          </Text>
-        </View>
-        <View style={styles.alignRight}>
-          <Text style={styles.marketMeta}>
-            <Text style={{ color: colors.gain }}>{latest.advances} up</Text> ·{' '}
-            <Text style={{ color: colors.loss }}>{latest.declines} down</Text>
-          </Text>
-          <Text style={[styles.marketMeta, { color: toneFor(latest.medianChangeBps) }]}>
-            median {latest.medianChangeBps > 0 ? '+' : latest.medianChangeBps < 0 ? '−' : ''}
-            {Math.abs(latest.medianChangeBps / 100).toFixed(2)}%
-          </Text>
-          <Text style={styles.marketMeta}>{rupeesCompact(latest.tradedValue)} traded</Text>
-        </View>
-      </View>
-
-      <View style={styles.chart}>
-        <IndexChart series={status.series} width={width} />
-      </View>
-
-      <Text style={styles.marketFoot}>
-        {windowBps === null
-          ? ''
-          : `${windowBps >= 0 ? 'Up' : 'Down'} ${Math.abs(windowBps / 100).toFixed(1)}% over the window. `}
-        {latest.counted} shares met the {shares(status.minVolume)}-share floor. Lower bars are net
-        advancing stocks, which tells a broad move from a narrow one.
-      </Text>
-    </Card>
-  );
-}
-
 const styles = StyleSheet.create({
   content: { gap: space.md, padding: space.lg, paddingBottom: space.xl * 2 },
-  marketHead: {
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: space.sm,
-  },
-  alignRight: { alignItems: 'flex-end' },
-  level: { color: colors.text, fontSize: 26, fontWeight: '700' },
-  change: { fontSize: 13, fontWeight: '600', marginTop: 2 },
-  marketMeta: { color: colors.textFaint, fontSize: 11, marginTop: 1 },
-  chart: { marginTop: space.md },
-  marketFoot: { color: colors.textFaint, fontSize: 11, lineHeight: 17, marginTop: space.sm },
   stats: { flexDirection: 'row', flexWrap: 'wrap', gap: space.lg },
   detail: { color: colors.textFaint, fontSize: 12, lineHeight: 18, marginTop: space.sm },
   accuracy: { marginTop: space.sm },
