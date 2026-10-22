@@ -14,6 +14,7 @@ import {
 import type { NarrativeWriter } from '../services/narrative.js';
 import { coverage } from '../services/ingest.js';
 import { getMarketStatus } from '../services/market.js';
+import { FACTOR_GUIDANCE } from '@psx/engine';
 import { prisma } from '../db/prisma.js';
 
 /**
@@ -244,6 +245,23 @@ export function signalRoutes(tokens: Tokens, narrativeWriter: NarrativeWriter): 
       res.json(await getMarketStatus(filters));
     },
   );
+
+  /**
+   * How each indicator is conventionally read, and what to watch next.
+   *
+   * Its own endpoint rather than a field on every factor, because the text is
+   * the same for every signal ever served and repeating it per factor per
+   * signal would be several kilobytes of identical prose on every request.
+   * Static reference data, so it is cacheable for a day.
+   *
+   * It explains indicators. It does not recommend trades: nothing here has
+   * settled long enough to justify one, and advising on securities for a fee
+   * is licensed work in Pakistan.
+   */
+  router.get('/factors/guide', ...guard, async (_req, res) => {
+    res.setHeader('cache-control', 'public, max-age=86400');
+    res.json({ guidance: FACTOR_GUIDANCE });
+  });
 
   /**
    * What price history is present.

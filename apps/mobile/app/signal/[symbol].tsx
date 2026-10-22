@@ -15,7 +15,13 @@ import { FactorList } from '@/components/FactorList';
 import { useFetch } from '@/lib/useFetch';
 import { actionLabel, categoryLabel, percent, rupees, shortDate } from '@/lib/format';
 import { actionTone, colors, radius, space, toneFor } from '@/lib/theme';
-import type { ChartBar, Signal, SignalFactor, SignalResponse } from '@/lib/types';
+import type {
+  ChartBar,
+  FactorGuidance,
+  Signal,
+  SignalFactor,
+  SignalResponse,
+} from '@/lib/types';
 
 type Horizon = 'SWING' | 'LONG_TERM';
 
@@ -39,6 +45,9 @@ export default function SignalScreen(): React.ReactNode {
   const signal = useFetch<SignalResponse>(
     symbol !== '' ? `/api/securities/${symbol}/signal?horizon=${horizon}` : null,
   );
+  // Static reference text, cached a day by the API, so this costs one request
+  // per app session rather than one per prediction opened.
+  const guide = useFetch<{ guidance: Record<string, FactorGuidance> }>('/api/factors/guide');
   const bars = useFetch<{ symbol: string; name: string; bars: ChartBar[] }>(
     symbol !== '' ? `/api/securities/${symbol}/bars?limit=180` : null,
   );
@@ -206,6 +215,7 @@ export default function SignalScreen(): React.ReactNode {
                 factors={sorted}
                 expandedKey={expandedKey}
                 onToggle={onToggleFactor}
+                guidance={guide.data?.guidance}
               />
             </Card>
 

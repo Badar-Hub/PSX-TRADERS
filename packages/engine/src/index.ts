@@ -3,6 +3,7 @@ export * from './patterns/candles.js';
 export * from './factors/types.js';
 export * from './factors/technical.js';
 export * from './factors/fundamental.js';
+export * from './factors/guidance.js';
 export * from './weights.js';
 export * from './scoring.js';
 export * from './narrative.js';

@@ -327,3 +327,16 @@ export interface MarketStatus {
   /** What the index is, in one sentence. Shown rather than paraphrased. */
   basis: string;
 }
+
+/**
+ * How one indicator is conventionally read.
+ *
+ * Education, not advice: it explains what the indicator measures and the
+ * condition that would change its reading. Nothing here says what to buy, and
+ * an engine test asserts as much.
+ */
+export interface FactorGuidance {
+  reads: string;
+  watchFor: string;
+  caveat: string;
+}

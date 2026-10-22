@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 import { money, percent, shortDate } from '@/lib/format';
 import type { ChartBar } from '@/components/PriceChart';
-import type { SignalResponse } from '@/lib/types';
+import type { FactorGuidance, SignalResponse } from '@/lib/types';
 import { SignalDetail } from './SignalDetail';
 
 export default async function SignalPage({
@@ -21,12 +21,17 @@ export default async function SignalPage({
   // is deliberate: seeing that the swing and long-term readings disagree is
   // often the most useful thing on the page, and it should not need a second
   // navigation to discover.
-  const [swing, longTerm, history] = await Promise.all([
+  const [swing, longTerm, history, guide] = await Promise.all([
     api<SignalResponse>(`/api/securities/${symbol}/signal?horizon=SWING`),
     api<SignalResponse>(`/api/securities/${symbol}/signal?horizon=LONG_TERM`),
     api<{ symbol: string; name: string; bars: ChartBar[] }>(
       `/api/securities/${symbol}/bars?limit=180`,
     ).catch(() => ({ symbol, name: symbol, bars: [] as ChartBar[] })),
+    // Reference text, cached a day by the API. A failure costs the guidance
+    // panel and nothing else, so it must not take the prediction down.
+    api<{ guidance: Record<string, FactorGuidance> }>('/api/factors/guide', {
+      revalidate: 86_400,
+    }).catch(() => ({ guidance: {} as Record<string, FactorGuidance> })),
   ]);
 
   const active = horizon === 'SWING' ? swing : longTerm;
@@ -79,6 +84,7 @@ export default async function SignalPage({
         active={active}
         other={other}
         bars={history.bars}
+        guidance={guide.guidance}
       />
 
       {/*

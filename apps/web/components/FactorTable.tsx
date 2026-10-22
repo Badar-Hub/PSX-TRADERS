@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { categoryLabel } from '@/lib/format';
-import type { SignalFactor } from '@/lib/types';
+import type { FactorGuidance, SignalFactor } from '@/lib/types';
 
 /**
  * The factor breakdown.
@@ -20,10 +20,13 @@ import type { SignalFactor } from '@/lib/types';
 export function FactorTable({
   factors,
   onHighlight,
+  guidance,
 }: {
   factors: SignalFactor[];
   /** Called with the dates a factor fired on, so the chart can mark them. */
   onHighlight?: (dates: string[] | null) => void;
+  /** Per-indicator reference text, keyed by factor key. Omitted if unavailable. */
+  guidance?: Record<string, FactorGuidance>;
 }) {
   const [expanded, setExpanded] = useState<string | null>(factors[0]?.key ?? null);
 
@@ -110,6 +113,36 @@ export function FactorTable({
                   <p className="mt-2 text-xs text-slate-500">
                     Fired on {factor.barDates.join(', ')} — marked on the chart.
                   </p>
+                )}
+
+                {/*
+                  What the indicator means and what changes it, which is the
+                  honest answer to "so what do I do". Not a recommendation:
+                  nothing in this app has settled long enough to justify one,
+                  and the reason above is about this stock today while this is
+                  about the indicator in general.
+                */}
+                {guidance?.[factor.key] !== undefined && (
+                  <dl className="mt-4 max-w-3xl space-y-2.5 border-t border-slate-800 pt-3">
+                    <div>
+                      <dt className="label">How it is read</dt>
+                      <dd className="mt-1 text-xs leading-relaxed text-slate-400">
+                        {guidance[factor.key]!.reads}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="label">What to watch</dt>
+                      <dd className="mt-1 text-xs leading-relaxed text-slate-400">
+                        {guidance[factor.key]!.watchFor}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="label text-amber-600">Where it misleads</dt>
+                      <dd className="mt-1 text-xs leading-relaxed text-amber-500/80">
+                        {guidance[factor.key]!.caveat}
+                      </dd>
+                    </div>
+                  </dl>
                 )}
               </div>
             )}

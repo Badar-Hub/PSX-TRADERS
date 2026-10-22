@@ -6,7 +6,7 @@ import { CategoryBreakdown, FactorTable } from '@/components/FactorTable';
 import { PriceChart, type ChartBar } from '@/components/PriceChart';
 import { ConfidenceMeter, SignalBadge } from '@/components/SignalBadge';
 import { actionLabel } from '@/lib/format';
-import type { SignalResponse } from '@/lib/types';
+import type { FactorGuidance, SignalResponse } from '@/lib/types';
 
 /**
  * The prediction view.
@@ -22,12 +22,15 @@ export function SignalDetail({
   active,
   other,
   bars,
+  guidance,
 }: {
   symbol: string;
   horizon: 'SWING' | 'LONG_TERM';
   active: SignalResponse;
   other: SignalResponse;
   bars: ChartBar[];
+  /** Per-indicator reference text, keyed by factor key. Empty if unavailable. */
+  guidance: Record<string, FactorGuidance>;
 }) {
   const [highlight, setHighlight] = useState<string[] | null>(null);
 
@@ -144,7 +147,11 @@ export function SignalDetail({
               <p className="numeric text-xs text-slate-600">score × weight = contribution</p>
             </div>
 
-            <FactorTable factors={active.signal.factors} onHighlight={setHighlight} />
+            <FactorTable
+              factors={active.signal.factors}
+              onHighlight={setHighlight}
+              guidance={guidance}
+            />
           </div>
         </>
       )}

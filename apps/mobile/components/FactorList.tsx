@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { categoryLabel } from '@/lib/format';
 import { colors, radius, space } from '@/lib/theme';
-import type { SignalFactor } from '@/lib/types';
+import type { FactorGuidance, SignalFactor } from '@/lib/types';
 
 /**
  * Why the engine said what it said.
@@ -20,10 +20,13 @@ export function FactorList({
   factors,
   expandedKey,
   onToggle,
+  guidance,
 }: {
   factors: SignalFactor[];
   expandedKey: string | null;
   onToggle: (factor: SignalFactor) => void;
+  /** Per-indicator reference text, keyed by factor key. */
+  guidance?: Record<string, FactorGuidance>;
 }): React.ReactNode {
   if (factors.length === 0) {
     return <Text style={styles.none}>No factor reported for this symbol.</Text>;
@@ -105,6 +108,27 @@ export function FactorList({
                   <Text style={styles.detailLabel}>Score</Text>
                   <Text style={styles.detailValue}>{factor.score.toFixed(1)} of ±100</Text>
                 </View>
+
+                {/*
+                  What the indicator means and what would change it. Not a
+                  recommendation: the reason above is about this stock today,
+                  this is about the indicator in general, and nothing in this
+                  app has settled long enough to justify telling anyone to act.
+                */}
+                {guidance?.[factor.key] !== undefined ? (
+                  <View style={styles.guide}>
+                    <Text style={styles.guideLabel}>How it is read</Text>
+                    <Text style={styles.guideText}>{guidance[factor.key]!.reads}</Text>
+                    <Text style={styles.guideLabel}>What to watch</Text>
+                    <Text style={styles.guideText}>{guidance[factor.key]!.watchFor}</Text>
+                    <Text style={[styles.guideLabel, styles.guideWarnLabel]}>
+                      Where it misleads
+                    </Text>
+                    <Text style={[styles.guideText, styles.guideWarn]}>
+                      {guidance[factor.key]!.caveat}
+                    </Text>
+                  </View>
+                ) : null}
               </View>
             ) : null}
           </Pressable>
@@ -146,4 +170,22 @@ const styles = StyleSheet.create({
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: space.sm },
   detailLabel: { color: colors.textFaint, fontSize: 11 },
   detailValue: { color: colors.textMuted, fontSize: 11, fontWeight: '500' },
+
+  guide: {
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: space.md,
+    paddingTop: space.sm,
+  },
+  guideLabel: {
+    color: colors.textFaint,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    marginTop: space.sm,
+    textTransform: 'uppercase',
+  },
+  guideText: { color: colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 2 },
+  guideWarnLabel: { color: colors.warn },
+  guideWarn: { color: colors.warn },
 });
