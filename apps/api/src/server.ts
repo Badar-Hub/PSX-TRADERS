@@ -1,4 +1,5 @@
 import { createApp } from './app.js';
+import { createNarrativeWriter } from './services/narrative.js';
 import { loadEnv } from './env.js';
 import { prisma } from './db/prisma.js';
 
@@ -12,10 +13,16 @@ import { prisma } from './db/prisma.js';
 
 async function main(): Promise<void> {
   const env = loadEnv();
-  const app = createApp({ env });
+
+  // Built here rather than inside createApp so the startup line can say which
+  // model is writing the prediction explanations, or that none is. Whether an
+  // explanation came from a language model is not something to leave implicit.
+  const narrativeWriter = createNarrativeWriter(env);
+  const app = createApp({ env, narrativeWriter });
 
   const server = app.listen(env.PORT, () => {
     console.log(`psx-trader api listening on http://localhost:${env.PORT} [${env.NODE_ENV}]`);
+    console.log(`narratives: ${narrativeWriter.describe()}`);
   });
 
   // Finish in-flight requests and release the connection pool before exiting,

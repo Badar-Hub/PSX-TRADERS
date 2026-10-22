@@ -1,5 +1,6 @@
 import {
   buildContext,
+  chooseNarrative,
   scoreSignal,
   settleSignal,
   summarise,
@@ -11,6 +12,7 @@ import { paisa, type Candle, type IsoDate, type SignalHorizon } from '@psx/share
 import { notFound } from '../http/errors.js';
 import { fromIsoDateColumn, toIsoDateColumn, toPaisa } from '../db/paisa.js';
 import { prisma } from '../db/prisma.js';
+import type { NarrativeWriter } from './narrative.js';
 
 /**
  * Computing, storing and settling predictions.
@@ -39,12 +41,22 @@ export interface ComputeOptions {
   /** Recompute even if a signal already exists for this day and version. */
   force?: boolean;
   persist?: boolean;
+  /**
+   * Supply a writer to have the LLM write the prose over the factor table.
+   *
+   * Omitted, the deterministic summary is used, which is what the nightly
+   * refresh does for every liquid symbol on the exchange. Scoring 880 signals
+   * is free; writing 880 narratives is not, and almost none of them would ever
+   * be read.
+   */
+  writer?: NarrativeWriter;
 }
 
 export interface ComputedSignal {
   signal: ScoredSignal;
-  /** The deterministic explanation; the LLM pass can replace it later. */
   narrative: string;
+  /** The model that wrote the prose, or null when it is the deterministic one. */
+  narrativeModel: string | null;
   signalId: string | null;
 }
 
@@ -127,14 +139,169 @@ export async function computeSignalForSymbol(
   if (!result.ok) return { ok: false, refusal: result };
 
   const signal = result.signal;
-  const narrative = summarise(signal);
+  const { text: narrative, model: narrativeModel } = await writeNarrative(signal, options.writer);
 
   if (options.persist === false) {
-    return { ok: true, computed: { signal, narrative, signalId: null } };
+    return { ok: true, computed: { signal, narrative, narrativeModel, signalId: null } };
   }
 
-  const signalId = await persistSignal(security.id, signal, narrative, context.dates);
-  return { ok: true, computed: { signal, narrative, signalId } };
+  const signalId = await persistSignal(
+    security.id,
+    signal,
+    narrative,
+    narrativeModel,
+    context.dates,
+  );
+  return { ok: true, computed: { signal, narrative, narrativeModel, signalId } };
+}
+
+/**
+ * The prose for one signal, preferring the model and falling back silently.
+ *
+ * Every path through here returns usable text. `chooseNarrative` in the engine
+ * runs the generated prose past `validateNarrative` first — which rejects
+ * advice, invented price targets and anything contradicting the score — and
+ * returns the deterministic summary if it fails. So the model can be absent,
+ * broken, rate-limited, refused, truncated or simply wrong, and the user still
+ * gets an explanation built from the same numbers as the score.
+ */
+async function writeNarrative(
+  signal: ScoredSignal,
+  writer: NarrativeWriter | undefined,
+  log: (message: string) => void = console.log,
+): Promise<{ text: string; model: string | null }> {
+  if (writer === undefined || !writer.enabled) {
+    return { text: summarise(signal), model: null };
+  }
+
+  const outcome = await writer.write({ signal });
+
+  if (!outcome.ok) {
+    // Logged at every severity because the operator cannot tell from the UI:
+    // a fallback looks exactly like a signal that was never upgraded.
+    log(`[narrative] ${signal.symbol} ${signal.horizon}: ${outcome.reason} — ${outcome.detail}`);
+    return { text: summarise(signal), model: null };
+  }
+
+  const chosen = chooseNarrative(signal, outcome.text);
+  if (chosen.source === 'deterministic') {
+    log(
+      `[narrative] ${signal.symbol} ${signal.horizon}: rejected the generated prose ` +
+        `(${chosen.problems.map((problem) => problem.code).join(', ')})`,
+    );
+    return { text: chosen.text, model: null };
+  }
+
+  return { text: chosen.text, model: outcome.model };
+}
+
+/**
+ * Writes the LLM prose onto a stored signal, if it does not have it yet.
+ *
+ * Called when a prediction is actually opened, which is the policy: narratives
+ * are generated for what gets read, not for every symbol on the exchange. The
+ * `narrativeModel` column is the cache key — null means the row still carries
+ * the deterministic summary, so this is the one and only generation per signal
+ * however many times it is viewed.
+ *
+ * It recomputes the score rather than rebuilding a `ScoredSignal` from the
+ * stored rows. Scoring is pure arithmetic over bars already in memory,
+ * measured in milliseconds, and it guarantees the prose was validated against
+ * exactly the factors being stored beside it. Reconstructing the signal from
+ * the database would risk validating against one thing and showing another.
+ */
+export async function ensureNarrative(
+  symbol: string,
+  horizon: SignalHorizon,
+  writer: NarrativeWriter,
+): Promise<SignalView | null> {
+  const existing = await getLatestSignal(symbol, horizon);
+  if (existing === null) return null;
+  if (!writer.enabled || existing.narrativeModel !== null) return existing;
+
+  const result = await computeSignalForSymbol(symbol, horizon, { writer });
+  if (!result.ok) return existing;
+
+  return (await getLatestSignal(symbol, horizon)) ?? existing;
+}
+
+export interface WarmSummary {
+  symbols: number;
+  written: number;
+  alreadyWritten: number;
+  skipped: number;
+}
+
+/**
+ * Writes the prose ahead of time for the symbols that are actually followed.
+ *
+ * The nightly job rescores every liquid symbol on the exchange — around 440,
+ * on two horizons — and writing prose for all of them would be nearly nine
+ * hundred calls a night, almost none of it ever read. So the night warms only
+ * what someone has shown an interest in: anything held, and anything with an
+ * armed stop or target on it. That is a handful of symbols, it is ready before
+ * the market opens, and everything else is written on the first view instead.
+ *
+ * "Engaged with" is taken from trades and alert rules rather than from the
+ * positions service. A symbol that was sold last week still has a signal worth
+ * reading if the user is watching it for a re-entry, and a replayed position
+ * of zero would exclude it.
+ */
+export async function warmNarratives(
+  writer: NarrativeWriter,
+  options: { horizons?: readonly SignalHorizon[] } = {},
+): Promise<WarmSummary> {
+  const horizons = options.horizons ?? (['SWING', 'LONG_TERM'] as const);
+  const summary: WarmSummary = { symbols: 0, written: 0, alreadyWritten: 0, skipped: 0 };
+
+  if (!writer.enabled) return summary;
+
+  const [traded, watched] = await Promise.all([
+    prisma.trade.findMany({
+      where: { status: 'ACTIVE' },
+      distinct: ['securityId'],
+      select: { security: { select: { symbol: true } } },
+    }),
+    prisma.alertRule.findMany({
+      where: { status: 'ARMED' },
+      distinct: ['securityId'],
+      select: { security: { select: { symbol: true } } },
+    }),
+  ]);
+
+  const symbols = [
+    ...new Set([
+      ...traded.map((row) => row.security.symbol),
+      ...watched.map((row) => row.security.symbol),
+    ]),
+  ].sort();
+
+  summary.symbols = symbols.length;
+
+  for (const symbol of symbols) {
+    for (const horizon of horizons) {
+      const before = await getLatestSignal(symbol, horizon);
+      if (before === null) {
+        summary.skipped += 1;
+        continue;
+      }
+      if (before.narrativeModel !== null) {
+        summary.alreadyWritten += 1;
+        continue;
+      }
+
+      const after = await ensureNarrative(symbol, horizon, writer);
+      if (after?.narrativeModel !== null && after?.narrativeModel !== undefined) {
+        summary.written += 1;
+      } else {
+        // Fell back to the deterministic summary. The reason is already logged
+        // by writeNarrative; counted here so the job's line adds up.
+        summary.skipped += 1;
+      }
+    }
+  }
+
+  return summary;
 }
 
 /**
@@ -149,6 +316,7 @@ async function persistSignal(
   securityId: string,
   signal: ScoredSignal,
   narrative: string,
+  narrativeModel: string | null,
   dates: readonly IsoDate[],
 ): Promise<string> {
   return prisma.$transaction(async (tx) => {
@@ -170,6 +338,7 @@ async function persistSignal(
         confidenceBps: Math.round(signal.confidence * 10_000),
         missingFactors: signal.missingFactors,
         narrative,
+        narrativeModel,
         priceAtSignal: BigInt(paisa(Math.round(signal.priceAtSignal * 100))),
         engineVersion: signal.engineVersion,
       },
@@ -179,6 +348,10 @@ async function persistSignal(
         confidenceBps: Math.round(signal.confidence * 10_000),
         missingFactors: signal.missingFactors,
         narrative,
+        // Replaced, not preserved: prose written about the previous factor
+        // table no longer describes this one, and keeping it would leave an
+        // explanation that quietly disagrees with the score above it.
+        narrativeModel,
         priceAtSignal: BigInt(paisa(Math.round(signal.priceAtSignal * 100))),
         // A recomputation supersedes the old outcome, since the factors behind
         // it have changed.
@@ -228,6 +401,10 @@ export interface SignalView {
   confidence: number;
   missingFactors: number;
   narrative: string | null;
+  /** Which model wrote the prose, or null for the deterministic summary. The
+   * clients show this, because a reader is entitled to know whether an
+   * explanation was written by a language model. */
+  narrativeModel: string | null;
   priceAtSignal: number | null;
   engineVersion: string;
   outcome: string;
@@ -313,6 +490,7 @@ function toSignalView(row: NonNullable<SignalRow>): SignalView {
     confidence: row.confidenceBps / 10_000,
     missingFactors: row.missingFactors,
     narrative: row.narrative,
+    narrativeModel: row.narrativeModel,
     // Integer paisa, like every other amount the API returns. Dividing by 100
     // here handed clients rupees as a float instead — 400.27999999999997 for a
     // close of 40028 paisa — so the one client that renders the field divided

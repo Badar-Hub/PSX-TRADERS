@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import { errorHandler, notFoundHandler } from './http/errors.js';
 import { Tokens } from './auth/tokens.js';
 import { createMailer, type Mailer } from './email/mailer.js';
+import { createNarrativeWriter, type NarrativeWriter } from './services/narrative.js';
 import { adminRoutes } from './routes/admin.js';
 import { authRoutes } from './routes/auth.js';
 import { portfolioRoutes } from './routes/portfolios.js';
@@ -34,6 +35,8 @@ export interface AppOptions {
   logError?: (error: unknown, context: { requestId?: string; method: string; path: string }) => void;
   /** Overridden in tests with a recording mailer, so nothing is sent. */
   mailer?: Mailer;
+  /** Overridden in tests with a recording writer, so no prompt is sent. */
+  narrativeWriter?: NarrativeWriter;
 }
 
 export function createApp(options: AppOptions): Express {
@@ -90,13 +93,14 @@ export function createApp(options: AppOptions): Express {
   });
 
   const mailer = options.mailer ?? createMailer(env);
+  const narrativeWriter = options.narrativeWriter ?? createNarrativeWriter(env);
 
   app.use('/api/auth', authRoutes(tokens, env, mailer));
   app.use('/api', adminRoutes(tokens, env, mailer));
   app.use('/api/portfolios', portfolioRoutes(tokens));
   app.use('/api', tradeRoutes(tokens));
   app.use('/api', reportRoutes(tokens));
-  app.use('/api', signalRoutes(tokens));
+  app.use('/api', signalRoutes(tokens, narrativeWriter));
   app.use('/api', stopRoutes(tokens));
 
   app.use(notFoundHandler);

@@ -1,10 +1,10 @@
 /**
  * The nightly job.
  *
- * Four steps in order, because each depends on the one before: ingest the
+ * Five steps in order, because each depends on the one before: ingest the
  * day's prices, check the armed stop rules against them, recompute signals
- * from the new history, then settle any prediction whose horizon has now
- * elapsed.
+ * from the new history, write the LLM prose for the symbols that are actually
+ * followed, then settle any prediction whose horizon has now elapsed.
  *
  * Stops come before signals deliberately. A breached stop is the only thing
  * here the user may need to act on tomorrow morning, so it is evaluated while
@@ -23,13 +23,14 @@
  */
 
 import { ingestLatest } from '../services/ingest.js';
-import { refreshSignals, settleDueSignals } from '../services/signals.js';
+import { refreshSignals, settleDueSignals, warmNarratives } from '../services/signals.js';
 import { evaluateArmedRules } from '../services/stops.js';
+import { createNarrativeWriter } from '../services/narrative.js';
 import { loadEnv } from '../env.js';
 import { prisma } from '../db/prisma.js';
 
 async function main(): Promise<void> {
-  loadEnv();
+  const env = loadEnv();
   const started = Date.now();
   let failed = false;
 
@@ -93,7 +94,29 @@ async function main(): Promise<void> {
     console.log('[nightly] skipping signals: no new prices');
   }
 
-  // 4. Judge the predictions whose time is up.
+  /*
+   * 4. Narratives, for the symbols someone follows.
+   *
+   * Only what is held or has an armed stop on it — a handful of symbols rather
+   * than the 880 signals just rescored. Everything else gets its prose written
+   * on the first view and cached, so the cost follows what is read.
+   *
+   * Off entirely when no ANTHROPIC_API_KEY is set, in which case every signal
+   * keeps the deterministic summary and nothing here runs.
+   */
+  const writer = createNarrativeWriter(env);
+  if (writer.enabled) {
+    const warmed = await warmNarratives(writer);
+    console.log(
+      `[nightly] narratives (${writer.describe()}): ${warmed.written} written, ` +
+        `${warmed.alreadyWritten} already done, ${warmed.skipped} left deterministic, ` +
+        `across ${warmed.symbols} followed symbol(s)`,
+    );
+  } else {
+    console.log(`[nightly] narratives: ${writer.describe()}`);
+  }
+
+  // 5. Judge the predictions whose time is up.
   const settled = await settleDueSignals();
   console.log(
     `[nightly] settled ${settled.settled}: ${settled.hits} hit, ${settled.misses} missed, ` +

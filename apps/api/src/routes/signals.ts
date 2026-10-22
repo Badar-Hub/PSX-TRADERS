@@ -7,10 +7,13 @@ import type { Tokens } from '../auth/tokens.js';
 import {
   accuracyReport,
   computeSignalForSymbol,
+  ensureNarrative,
   getLatestSignal,
   getSignalById,
 } from '../services/signals.js';
+import type { NarrativeWriter } from '../services/narrative.js';
 import { coverage } from '../services/ingest.js';
+import { getMarketStatus } from '../services/market.js';
 import { prisma } from '../db/prisma.js';
 
 /**
@@ -33,7 +36,7 @@ const HorizonQuery = z.object({
 const SymbolParams = z.object({ symbol: symbolString });
 const IdParams = z.object({ id: cuid });
 
-export function signalRoutes(tokens: Tokens): Router {
+export function signalRoutes(tokens: Tokens, narrativeWriter: NarrativeWriter): Router {
   const router = Router();
   const guard = requireActiveUser(tokens);
 
@@ -46,7 +49,18 @@ export function signalRoutes(tokens: Tokens): Router {
       const { symbol } = params<z.infer<typeof SymbolParams>>(req);
       const { horizon } = query<z.infer<typeof HorizonQuery>>(req);
 
-      const stored = await getLatestSignal(symbol, horizon);
+      /*
+       * The narrative is written here, on the way out of the one endpoint that
+       * serves it, and cached on the row. The alternative — generating for
+       * every liquid symbol in the nightly job — is 880 calls a night for
+       * prose almost none of which is ever read. This way the first view of a
+       * symbol pays for one short call and every later view is free.
+       *
+       * The portfolio list endpoint deliberately does not do this: it renders
+       * action badges, not prose, and upgrading there would fire a call per
+       * holding on every dashboard load.
+       */
+      const stored = await ensureNarrative(symbol, horizon, narrativeWriter);
       if (stored !== null) {
         res.json({ signal: stored, source: 'stored' });
         return;
@@ -76,7 +90,10 @@ export function signalRoutes(tokens: Tokens): Router {
       const { symbol } = params<z.infer<typeof SymbolParams>>(req);
       const { horizon } = query<z.infer<typeof HorizonQuery>>(req);
 
-      const result = await computeSignalForSymbol(symbol, horizon, { force: true });
+      const result = await computeSignalForSymbol(symbol, horizon, {
+        force: true,
+        writer: narrativeWriter,
+      });
       if (!result.ok) {
         res.json({
           signal: null,
@@ -202,6 +219,29 @@ export function signalRoutes(tokens: Tokens): Router {
           closeOutsideRange: row.closeOutsideRange,
         })),
       });
+    },
+  );
+
+  /**
+   * Where the market went, for the dashboard chart.
+   *
+   * The `basis` sentence travels with the numbers rather than living in the
+   * UI. The level is not the KSE-100 and every client has to say so; shipping
+   * the explanation with the data means there is one place it can be got
+   * wrong, rather than one per client.
+   */
+  router.get(
+    '/market/status',
+    ...guard,
+    validate({
+      query: z.object({
+        days: z.coerce.number().int().min(5).max(2000).optional(),
+        minVolume: z.coerce.number().int().min(0).max(100_000_000).optional(),
+      }),
+    }),
+    async (req, res) => {
+      const filters = query<{ days?: number; minVolume?: number }>(req);
+      res.json(await getMarketStatus(filters));
     },
   );
 

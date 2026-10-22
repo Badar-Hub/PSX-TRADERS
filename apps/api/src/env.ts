@@ -79,8 +79,42 @@ const Schema = z.object({
 
   PSX_DOWNLOAD_BASE: z.string().url().default('https://dps.psx.com.pk/download'),
 
+  /**
+   * Absent or empty means the LLM narrative pass is off and the app shows the
+   * deterministic summaries. That is a supported way to run, not a degraded
+   * one: the factor table is the explanation, and the prose is a rendering of
+   * it.
+   */
   ANTHROPIC_API_KEY: z.string().optional(),
   NARRATIVE_MODEL: z.string().default('claude-sonnet-5-5'),
+
+  /**
+   * Pinned explicitly rather than left to the SDK.
+   *
+   * The Anthropic SDK reads `ANTHROPIC_BASE_URL` from the environment by
+   * itself, so on a machine where that is set for some other tool — a proxy, a
+   * gateway, a local recorder — this app would quietly send its prompts there
+   * instead. Reading it through the schema means the value is validated, it
+   * appears in the startup log when it is not the official endpoint, and
+   * redirecting the app takes a deliberate change to its own configuration.
+   */
+  ANTHROPIC_BASE_URL: z.string().url().default('https://api.anthropic.com'),
+
+  /** Enough for five sentences with room to spare; a cut-off reply is discarded. */
+  NARRATIVE_MAX_TOKENS: z.coerce.number().int().min(256).max(8_000).default(1_024),
+
+  /**
+   * A ceiling on generations, counted per process rather than per day.
+   *
+   * Not a budget so much as a blast radius: narratives are written for the
+   * symbols actually looked at, a handful a day, so reaching this means
+   * something is looping — and the realistic loop is inside one run of the
+   * nightly job. A counter that lives as long as the process catches exactly
+   * that, and restarting resets it, which is the honest limitation of not
+   * having a column to count from. The app falls back to the deterministic
+   * summaries when it trips, so a wrong guess here costs prose, not function.
+   */
+  NARRATIVE_CALL_BUDGET: z.coerce.number().int().min(0).max(100_000).default(250),
 });
 
 export type Env = z.infer<typeof Schema> & { corsOrigins: string[] };

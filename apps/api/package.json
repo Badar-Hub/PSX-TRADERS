@@ -18,9 +18,11 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma migrate reset --force",
+    "reclassify": "tsx src/bin/reclassify-listings.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.137.0",
     "@prisma/client": "^6.1.0",
     "@psx/data": "workspace:*",
     "@psx/engine": "workspace:*",
@@ -39,9 +41,9 @@
     "@types/express": "^5.0.0",
     "@types/express-serve-static-core": "^5.0.4",
     "@types/node": "^22.10.2",
-    "@types/supertest": "^6.0.2",
     "@types/nodemailer": "^6.4.17",
     "@types/pg": "^8.11.10",
+    "@types/supertest": "^6.0.2",
     "dotenv": "^16.4.7",
     "pg": "^8.13.1",
     "prisma": "^6.1.0",
