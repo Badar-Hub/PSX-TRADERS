@@ -21,3 +21,6 @@ Thumbs.db
 # next
 .next/
 out/
+
+# narrative eval outputs: raw model text, regenerable, not source
+narrative-eval-*.json

@@ -19,7 +19,8 @@
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "db:reset": "prisma migrate reset --force",
-    "reclassify": "tsx src/bin/reclassify-listings.ts"
+    "reclassify": "tsx src/bin/reclassify-listings.ts",
+    "narrative-eval": "tsx src/bin/narrative-eval.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.137.0",
