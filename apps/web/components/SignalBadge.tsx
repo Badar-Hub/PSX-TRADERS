@@ -37,16 +37,30 @@ export function SignalBadge({
 export function ConfidenceMeter({
   confidence,
   missingFactors,
+  coverage,
+  agreement,
 }: {
   confidence: number;
   missingFactors: number;
+  /** Shown in the tooltip when known, so the figure can be taken apart. */
+  coverage?: number | null;
+  agreement?: number | null;
 }) {
   const pct = Math.round(confidence * 100);
   const tone = pct >= 60 ? 'bg-emerald-500' : pct >= 35 ? 'bg-amber-500' : 'bg-slate-500';
 
+  // The actual arithmetic, when the terms are available. "51% is 78% coverage
+  // times 66% agreement" is a figure someone can argue with; a bare 51% is one
+  // they can only accept or ignore.
+  const decomposition =
+    coverage == null || agreement == null
+      ? 'How much of the model had data, and how closely those factors agreed.'
+      : `${pct}% = ${Math.round(coverage * 100)}% of the model by weight had data, ` +
+        `times ${Math.round(agreement * 100)}% agreement between the factors that did.`;
+
   return (
     <div
-      title="How much of the model had data, and how closely those factors agreed. Not a probability of being right."
+      title={`${decomposition} Not a probability of being right.`}
       className="flex items-center gap-2"
     >
       <div className="h-1.5 w-20 overflow-hidden rounded-full bg-slate-800">

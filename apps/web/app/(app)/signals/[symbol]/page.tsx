@@ -84,12 +84,24 @@ export default async function SignalPage({
         <p className="text-xs leading-relaxed text-slate-600">
           Computed by engine {active.signal.engineVersion} from prices up to{' '}
           {shortDate(active.signal.asOf)}
+          {/*
+            Coverage comes from the engine, not from counting factors here.
+            This line used to compute 1 - missing / total, which gave "67% of
+            the model" for a signal whose narrative said 78% — because the
+            model is weighted, so it is not an equal number of parts, and the
+            weighted share is the figure confidence is built from. A view
+            deriving its own version of a number the engine already computed is
+            how two figures end up disagreeing in one paragraph.
+          */}
           {active.signal.missingFactors > 0 && (
             <>
               . {active.signal.missingFactors} factor
-              {active.signal.missingFactors === 1 ? '' : 's'} could not be assessed, so this
-              rests on {percent(1 - active.signal.missingFactors / (active.signal.factors.length + active.signal.missingFactors))} of
-              the model
+              {active.signal.missingFactors === 1 ? '' : 's'} could not be assessed
+              {active.signal.coverage !== null
+                ? `, so this rests on ${percent(active.signal.coverage)} of the model by weight`
+                : ` (${active.signal.factors.length} of ${
+                    active.signal.factors.length + active.signal.missingFactors
+                  } reported)`}
             </>
           )}
           . Factor weights are a considered prior, not a model fitted to historical

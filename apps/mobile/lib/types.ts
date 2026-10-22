@@ -157,6 +157,9 @@ export interface Signal {
   action: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
   score: number;
   confidence: number;
+  /** The two terms confidence multiplies. Null on signals scored before they were stored. */
+  coverage: number | null;
+  agreement: number | null;
   missingFactors: number;
   narrative: string | null;
   /**

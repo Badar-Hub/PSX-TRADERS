@@ -692,6 +692,21 @@ model Signal {
   /// 0..1 stored in basis points. Reflects factor agreement and data coverage,
   /// not probability of being right.
   confidenceBps Int
+  /// The two terms confidence is the product of, kept so the figure can be
+  /// decomposed rather than taken on trust: coverage is the weighted share of
+  /// the model that had data, agreement how closely those factors agreed.
+  ///
+  /// Stored because neither can be recovered afterwards. Factor weights are
+  /// persisted already renormalised over the factors that reported, so the
+  /// original denominator is gone, and a view that wants coverage has no
+  /// choice but to invent its own — which is what happened: the signal page
+  /// computed "67% of the model" by counting factors, while the narrative
+  /// quoted the engine's weighted 78%, and both were labelled the same way.
+  ///
+  /// Nullable for rows scored before this existed. They are rewritten on the
+  /// next nightly run.
+  coverageBps  Int?
+  agreementBps Int?
   /// Factors skipped for want of data, usually fundamentals.
   missingFactors Int @default(0)
 

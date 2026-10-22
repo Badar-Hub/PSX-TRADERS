@@ -374,6 +374,31 @@ describe.skipIf(!hasDatabase)('signals from stored prices', () => {
     const served = await getLatestSignal('AAAA', 'SWING');
     expect(served?.priceAtSignal).toBe(Number(stored.priceAtSignal));
     expect(Number.isInteger(served?.priceAtSignal)).toBe(true);
+
+    /*
+     * Coverage and agreement are served, and confidence is their product.
+     *
+     * Stored because neither survives otherwise: factor weights are persisted
+     * already renormalised over the factors that reported, so the original
+     * denominator is gone and a client wanting coverage has to invent its own.
+     * Which is what happened — the signal page counted factors and announced
+     * "67% of the model" while the narrative quoted the engine's weighted 78%,
+     * both under the same words.
+     */
+    expect(served?.coverage).not.toBeNull();
+    expect(served?.agreement).not.toBeNull();
+    expect(served!.coverage!).toBeGreaterThan(0);
+    expect(served!.coverage!).toBeLessThanOrEqual(1);
+    // Within a basis point either way: all three are stored rounded to bps.
+    expect(served!.coverage! * served!.agreement!).toBeCloseTo(served!.confidence, 2);
+
+    // And coverage is the weighted share, not the count of reporting factors,
+    // which is the whole reason the two figures differed.
+    const byCount =
+      stored.factors.length / (stored.factors.length + stored.missingFactors);
+    if (stored.missingFactors > 0) {
+      expect(served!.coverage!).not.toBeCloseTo(byCount, 3);
+    }
     for (const factor of stored.factors) {
       expect(factor.reason.length).toBeGreaterThan(20);
       expect(factor.display.length).toBeGreaterThan(0);

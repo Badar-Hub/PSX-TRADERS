@@ -336,6 +336,8 @@ async function persistSignal(
         action: signal.action,
         scoreX100: Math.round(signal.score * 100),
         confidenceBps: Math.round(signal.confidence * 10_000),
+        coverageBps: Math.round(signal.coverage * 10_000),
+        agreementBps: Math.round(signal.agreement * 10_000),
         missingFactors: signal.missingFactors,
         narrative,
         narrativeModel,
@@ -346,6 +348,8 @@ async function persistSignal(
         action: signal.action,
         scoreX100: Math.round(signal.score * 100),
         confidenceBps: Math.round(signal.confidence * 10_000),
+        coverageBps: Math.round(signal.coverage * 10_000),
+        agreementBps: Math.round(signal.agreement * 10_000),
         missingFactors: signal.missingFactors,
         narrative,
         // Replaced, not preserved: prose written about the previous factor
@@ -399,6 +403,17 @@ export interface SignalView {
   action: string;
   score: number;
   confidence: number;
+  /**
+   * The two terms confidence is the product of. Null on rows scored before
+   * they were stored.
+   *
+   * Served so a client never has to derive its own version: the signal page
+   * used to compute coverage by counting factors and called it "% of the
+   * model", which disagreed with the weighted figure the engine had already
+   * computed and the narrative already quoted.
+   */
+  coverage: number | null;
+  agreement: number | null;
   missingFactors: number;
   narrative: string | null;
   /** Which model wrote the prose, or null for the deterministic summary. The
@@ -488,6 +503,9 @@ function toSignalView(row: NonNullable<SignalRow>): SignalView {
     action: row.action,
     score: row.scoreX100 / 100,
     confidence: row.confidenceBps / 10_000,
+    // Null on rows scored before these were stored; the next nightly fills them.
+    coverage: row.coverageBps === null ? null : row.coverageBps / 10_000,
+    agreement: row.agreementBps === null ? null : row.agreementBps / 10_000,
     missingFactors: row.missingFactors,
     narrative: row.narrative,
     narrativeModel: row.narrativeModel,

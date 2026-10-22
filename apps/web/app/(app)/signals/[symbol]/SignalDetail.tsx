@@ -97,6 +97,8 @@ export function SignalDetail({
                     <ConfidenceMeter
                       confidence={active.signal.confidence}
                       missingFactors={active.signal.missingFactors}
+                      coverage={active.signal.coverage}
+                      agreement={active.signal.agreement}
                     />
                   </div>
                 </div>
