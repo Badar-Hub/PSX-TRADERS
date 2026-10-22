@@ -15,8 +15,15 @@ import Constants from 'expo-constants';
  * port gives the API's address on the same network, whichever Wi-Fi the laptop
  * happens to be on today.
  *
- * `extra.apiBaseUrl` in app.json overrides it, which is what a real build uses
- * to point at a deployed API instead of someone's laptop.
+ * `extra.apiBaseUrl` in app.json is the fallback for a standalone build, which
+ * has no dev server to ask and so has no way to work it out.
+ *
+ * The order matters and used to be the other way round. With the configured
+ * value winning, setting it for an installable APK also pinned Expo Go to that
+ * one address — so the dev build stopped following whichever network the laptop
+ * was on, which is the entire point of deriving it. Derivation first means both
+ * work: dev follows the dev server, a standalone build falls back to the
+ * configured address.
  */
 
 const API_PORT = 4000;
@@ -52,15 +59,17 @@ function fromLocation(): string | null {
 }
 
 function resolveBaseUrl(): string {
+  // Derivation first, so a dev build follows whatever network it is on.
+  const derived = fromDevServer() ?? fromLocation();
+  if (derived !== null) return derived;
+
+  // No dev server and not a browser: a standalone build, which can only use
+  // what it was told at build time.
   const configured = (Constants.expoConfig?.extra as { apiBaseUrl?: string | null } | undefined)
     ?.apiBaseUrl;
   if (typeof configured === 'string' && configured !== '') return configured;
 
-  const derived = fromDevServer() ?? fromLocation();
-  if (derived !== null) return derived;
-
-  // A production build with nothing configured. Failing loudly here beats
-  // every screen showing an unexplained network error.
+  // Failing loudly beats every screen showing an unexplained network error.
   throw new Error(
     'No API address. Set expo.extra.apiBaseUrl in app.json for a standalone build.',
   );

@@ -23,14 +23,15 @@
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": false
     },
     "extra": {
-      "//": "API_BASE_URL overrides the address derived from the dev server. Set it for a build that talks to a deployed API.",
-      "apiBaseUrl": null
+      "//": "Where a STANDALONE build looks for the API. Dev builds ignore this and derive the address from the Expo dev server, so it follows whatever network the laptop is on. A LAN address works only on that network with the API running; replace it with a tunnel or a deployed URL for an APK that works anywhere.",
+      "apiBaseUrl": "http://10.1.0.15:4000"
     },
     "web": {
       "bundler": "metro",
