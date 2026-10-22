@@ -33,10 +33,17 @@ export interface Listing {
  * Classifies a listing using its company name rather than its ticker.
  *
  * A ticker suffix is the obvious-looking signal and it is wrong. "Ends in R"
- * would classify JSRR (JS Rental REIT) and SRR as rights issues, and both are
- * ordinary listings. The name is unambiguous: the master list marks the real
- * ones "(Right)", and on 20 Oct there were exactly four of them out of 1085
- * entries, against dozens of tickers ending in R.
+ * would classify JSRR (JS Rental REIT), SRR, GTYR, HCAR and MACTER as rights
+ * issues, and all of them are ordinary listings. What is unambiguous is the
+ * parenthesised marker the exchange appends to the company name — "Waves Home
+ * (R)", "EFU Life(R)" — which none of those twelve lookalikes carries.
+ *
+ * Both spellings are matched. The daily closing summary writes "(R)" and this
+ * only looked for "(Right)", so against the files this app actually ingests the
+ * test never fired: 18 rights letters were stored as ordinary equities, which
+ * put them in the universe for predictions and into a market index they then
+ * dominated. A rights letter trading at one paisa that closes at 76 is a
+ * +7,500% day, and it is not a day the market had.
  *
  * The ticker is used only once the name has already established the kind, to
  * recover the parent ticker by stripping the rights suffix ("786R" to "786",
@@ -46,7 +53,7 @@ export function classifyListing(record: PsxSymbolRecord): Listing {
   const name = `${record.fullName} ${record.shortName}`;
   const symbol = record.symbol;
 
-  if (/\(right\)/i.test(name)) {
+  if (/\(\s*(?:r|right|rights)\s*\)/i.test(name)) {
     const stripped = /^(.*?)R\d*$/.exec(symbol);
     const base = stripped?.[1];
     return { base: base !== undefined && base.length >= 2 ? base : symbol, kind: 'RIGHT' };

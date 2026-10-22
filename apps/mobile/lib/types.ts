@@ -349,3 +349,31 @@ export interface StopEvaluation {
   skipped: number;
   notes: string[];
 }
+
+export interface MarketDay {
+  date: string;
+  /** Index level, based at 1,000 on the first stored session. */
+  level: number;
+  /** Change in index points against the previous stored session. */
+  change: number;
+  changeBps: number;
+  /** The median stock move that day. Diverges from the mean in a narrow market. */
+  medianChangeBps: number;
+  advances: number;
+  declines: number;
+  unchanged: number;
+  counted: number;
+  volume: number;
+  tradedValue: number;
+}
+
+export interface MarketStatus {
+  /** Oldest first, as a chart reads. */
+  series: MarketDay[];
+  latest: MarketDay | null;
+  previous: MarketDay | null;
+  minVolume: number;
+  base: number;
+  /** What the index is, in one sentence. Shown rather than paraphrased. */
+  basis: string;
+}

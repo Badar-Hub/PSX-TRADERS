@@ -88,9 +88,32 @@ describe('classifyListing', () => {
     return classifyListing(record!);
   };
 
-  it('finds exactly the four rights issues the file names', () => {
+  /*
+   * Seven, not four.
+   *
+   * The exchange marks a rights letter two ways and uses both in the same
+   * file: "(Right)" in the long name, "(R)" in the short one. 786R, AGICR2,
+   * STLR and WAVESAPPR carry the first; CENIR, EFULR and LSEFSLR write "Right"
+   * with no brackets in the long name and only "(R)" in the short. Matching
+   * "(Right)" alone found the first four and silently let the other three
+   * through as ordinary equities.
+   *
+   * Worse, the daily closing summary — the file every ingest reads, as opposed
+   * to this master, which it reads once — uses "(R)" exclusively. So against
+   * live data the old test matched nothing at all, and eighteen rights letters
+   * were stored as equities.
+   */
+  it('finds every rights issue the file marks, in either spelling', () => {
     const rights = records.filter((r) => classifyListing(r).kind === 'RIGHT');
-    expect(rights).toHaveLength(4);
+    expect(rights.map((r) => r.symbol).sort()).toEqual([
+      '786R',
+      'AGICR2',
+      'CENIR',
+      'EFULR',
+      'LSEFSLR',
+      'STLR',
+      'WAVESAPPR',
+    ]);
   });
 
   it('recovers the parent ticker of a rights issue', () => {
@@ -100,11 +123,18 @@ describe('classifyListing', () => {
 
   /**
    * The regression this locks down: a "ticker ends in R" rule called these
-   * rights issues. They are a REIT and an ordinary listing.
+   * rights issues. They are a REIT and ordinary listings.
+   *
+   * Still the reason the test is on the name and not the ticker, and still
+   * safe after widening the pattern to "(R)": none of these carries a
+   * parenthesised marker, which is the whole point of requiring one.
    */
   it('does not mistake tickers ending in R for rights issues', () => {
     expect(classify('JSRR').kind).toBe('EQUITY');
     expect(classify('SRR').kind).toBe('EQUITY');
+    expect(classify('GTYR').kind).toBe('EQUITY');
+    expect(classify('HCAR').kind).toBe('EQUITY');
+    expect(classify('MACTER').kind).toBe('EQUITY');
   });
 
   it('recognises ETFs and preference classes by name', () => {

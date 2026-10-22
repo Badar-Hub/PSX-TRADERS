@@ -10,10 +10,11 @@ import {
   signedRupees,
   toneFor,
 } from '@/lib/format';
-import type { PortfolioSummary, Signal } from '@/lib/types';
+import type { MarketStatus, PortfolioSummary, Signal } from '@/lib/types';
 import { Stat } from '@/components/Stat';
 import { SignalBadge } from '@/components/SignalBadge';
 import { PortfolioPicker } from './PortfolioPicker';
+import { MarketPanel } from './MarketPanel';
 
 export default async function PositionsPage({
   searchParams,
@@ -36,11 +37,14 @@ export default async function PositionsPage({
 
   // Positions and signals in parallel: neither depends on the other, and the
   // signal lookup is the slower of the two.
-  const [summary, signalsResponse] = await Promise.all([
+  const [summary, signalsResponse, market] = await Promise.all([
     api<PortfolioSummary>(`/api/portfolios/${active.id}/positions`),
     api<{ signals: Array<{ symbol: string; signal: Signal | null }> }>(
       `/api/portfolios/${active.id}/signals?horizon=SWING`,
     ).catch(() => ({ signals: [] })),
+    // The market panel is context, not the point of the page, so a failure
+    // here must not take the portfolio down with it.
+    api<MarketStatus>('/api/market/status?days=180').catch(() => null),
   ]);
 
   const signalBySymbol = new Map(
@@ -68,6 +72,8 @@ export default async function PositionsPage({
           </Link>
         </div>
       </div>
+
+      {market !== null && <MarketPanel status={market} />}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Market value" value={rupees(summary.marketValue)} />
