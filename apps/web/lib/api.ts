@@ -106,7 +106,12 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
 export async function apiPublic<T>(
   path: string,
   body: unknown,
-): Promise<{ ok: true; data: T } | { ok: false; status: number; code: string; message: string }> {
+): Promise<
+  | { ok: true; data: T }
+  // `details` carries the structured part of a refusal — how many guesses are
+  // left on a verification code, for instance — which a message string cannot.
+  | { ok: false; status: number; code: string; message: string; details?: unknown }
+> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -126,6 +131,7 @@ export async function apiPublic<T>(
       status: response.status,
       code: parsed.error?.code ?? 'UNKNOWN',
       message: parsed.error?.message ?? 'Something went wrong',
+      ...(parsed.error?.details !== undefined ? { details: parsed.error.details } : {}),
     };
   }
 

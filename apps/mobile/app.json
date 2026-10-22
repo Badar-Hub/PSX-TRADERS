@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "PSX Trader",
+    "slug": "psx-trader",
+    "version": "0.1.0",
+    "scheme": "psxtrader",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#020617",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "tech.stellarsoft.psxtrader"
+    },
+    "android": {
+      "package": "tech.stellarsoft.psxtrader",
+      "adaptiveIcon": {
+        "backgroundColor": "#020617"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "extra": {
+      "//": "API_BASE_URL overrides the address derived from the dev server. Set it for a build that talks to a deployed API.",
+      "apiBaseUrl": null
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    }
+  }
+}

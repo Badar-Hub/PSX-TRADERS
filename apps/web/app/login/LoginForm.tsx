@@ -68,6 +68,12 @@ export function LoginForm({ initialMode }: { initialMode: 'signin' | 'register' 
           </p>
         )}
 
+        {state.notice != null && (
+          <p className="rounded-lg border border-sky-800/40 bg-sky-950/30 px-3 py-2 text-sm leading-relaxed text-sky-300">
+            {state.notice}
+          </p>
+        )}
+
         <button type="submit" disabled={pending} className="btn-primary w-full">
           {pending ? 'Working…' : isRegister ? 'Create account' : 'Sign in'}
         </button>

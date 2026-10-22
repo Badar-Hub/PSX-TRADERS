@@ -10,6 +10,7 @@ import { backfill, coverage, ingestTradingDay } from '../../src/services/ingest.
 import {
   accuracyReport,
   computeSignalForSymbol,
+  getLatestSignal,
   liquidSymbols,
   settleDueSignals,
 } from '../../src/services/signals.js';
@@ -361,6 +362,18 @@ describe.skipIf(!hasDatabase)('signals from stored prices', () => {
     expect(stored.outcome).toBe('PENDING');
     expect(stored.priceAtSignal).not.toBeNull();
     expect(stored.narrative).not.toBeNull();
+
+    /*
+     * The served price is integer paisa, like every other amount in the API.
+     *
+     * This was divided by 100 on the way out, which handed clients a float in
+     * rupees; the client that renders it divided again and showed a
+     * four-hundred-rupee share as Rs 4.00. Nothing caught it, because "is it
+     * null" is all the assertion above asked for.
+     */
+    const served = await getLatestSignal('AAAA', 'SWING');
+    expect(served?.priceAtSignal).toBe(Number(stored.priceAtSignal));
+    expect(Number.isInteger(served?.priceAtSignal)).toBe(true);
     for (const factor of stored.factors) {
       expect(factor.reason.length).toBeGreaterThan(20);
       expect(factor.display.length).toBeGreaterThan(0);

@@ -5,13 +5,19 @@
       "name": "web",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@psx/web", "dev"],
-      "port": 3000
+      "port": 3100
     },
     {
       "name": "api",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@psx/api", "dev"],
       "port": 4000
+    },
+    {
+      "name": "mobile",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@psx/mobile", "exec", "expo", "start", "--web", "--port", "8081"],
+      "port": 8081
     }
   ]
 }

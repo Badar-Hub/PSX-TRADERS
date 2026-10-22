@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { Suspense } from 'react';
+import { requireActive } from '@/lib/account';
 import { signOut } from '../login/actions';
 import { NavLinks } from './NavLinks';
 
@@ -10,7 +11,18 @@ import { NavLinks } from './NavLinks';
  */
 export const dynamic = 'force-dynamic';
 
-export default function AppLayout({ children }: { children: React.ReactNode }) {
+export default async function AppLayout({ children }: { children: React.ReactNode }) {
+  /*
+   * The gate, in one place.
+   *
+   * Every page under this layout is behind it, so there is no page that forgot
+   * to check — an unverified or unapproved account is sent to the step it is
+   * actually on before any of them renders. The API enforces the same thing on
+   * every request; this is so the user sees a screen that explains itself
+   * rather than a dashboard full of 403s.
+   */
+  const account = await requireActive();
+
   return (
     <div className="min-h-screen">
       <header className="border-b border-slate-800 bg-slate-900/40">
@@ -25,14 +37,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             render before the parameters are known.
           */}
           <Suspense fallback={<div className="h-8" />}>
-            <NavLinks />
+            <NavLinks isAdmin={account.role === 'ADMIN'} />
           </Suspense>
 
-          <form action={signOut} className="ml-auto">
-            <button type="submit" className="text-xs text-slate-500 hover:text-slate-300">
-              Sign out
-            </button>
-          </form>
+          <div className="ml-auto flex items-center gap-4">
+            <span className="hidden text-xs text-slate-500 sm:inline">{account.email}</span>
+            <form action={signOut}>
+              <button type="submit" className="text-xs text-slate-500 hover:text-slate-300">
+                Sign out
+              </button>
+            </form>
+          </div>
         </div>
       </header>
 

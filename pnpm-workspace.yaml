@@ -10,3 +10,32 @@ allowBuilds:
   '@prisma/engines': true
   esbuild: true
   prisma: true
+
+# expo-router 4.0.22 requires query-string at runtime but does not declare it.
+# npm's flat node_modules hides the omission; pnpm links each package in
+# isolation, so the import fails to resolve and the bundle will not build.
+#
+# Patched here rather than worked around in metro.config.js: adding the missing
+# entry to expo-router's own manifest means pnpm links it where the import
+# expects to find it, and normal resolution works. Hoisting it to the workspace
+# root instead would make every package in the repo able to import it, which is
+# the strictness this install mode exists to provide.
+packageExtensions:
+  expo-router:
+    dependencies:
+      query-string: ^7.1.3
+
+  # The repo now holds two React major versions: 19 for the Next.js dashboard,
+  # 18 for the Expo app, which is what Expo SDK 52 supports. Both type packages
+  # therefore exist, and pnpm hoists one of them into its own fallback
+  # directory. next's bundled styled-jsx type declarations import "react"
+  # without declaring it, so they resolve through that fallback — and when the
+  # fallback happens to be the React 18 types, both copies load at once, their
+  # global JSX declarations collide, and the dashboard stops typechecking with
+  # an error about Suspense that has nothing to do with Suspense.
+  #
+  # Declaring it pins the resolution instead of leaving it to whichever copy
+  # pnpm hoisted. The mobile app is unaffected: it does not depend on next.
+  next:
+    dependencies:
+      '@types/react': ^19.0.0

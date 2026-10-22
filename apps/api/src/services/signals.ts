@@ -313,7 +313,11 @@ function toSignalView(row: NonNullable<SignalRow>): SignalView {
     confidence: row.confidenceBps / 10_000,
     missingFactors: row.missingFactors,
     narrative: row.narrative,
-    priceAtSignal: row.priceAtSignal === null ? null : Number(row.priceAtSignal) / 100,
+    // Integer paisa, like every other amount the API returns. Dividing by 100
+    // here handed clients rupees as a float instead — 400.27999999999997 for a
+    // close of 40028 paisa — so the one client that renders the field divided
+    // again and showed a four-hundred-rupee share as Rs 4.00.
+    priceAtSignal: row.priceAtSignal === null ? null : Number(row.priceAtSignal),
     engineVersion: row.engineVersion,
     outcome: row.outcome,
     factors,
