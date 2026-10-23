@@ -28,7 +28,7 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
- Service name, not the host's address: the dashboard reaches the APIPOSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env.production}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env.production}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
       POSTGRES_DB: ${POSTGRES_DB:-psx_trader}
     volumes:
