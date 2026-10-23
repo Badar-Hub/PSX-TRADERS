@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { useSecureCookies } from './lib/cookieSecurity';
 
 /**
  * Keeps the session alive.
@@ -56,7 +57,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 
     const pair = (await response.json()) as { accessToken: string; refreshToken: string };
     const next = NextResponse.next();
-    const secure = process.env.NODE_ENV === 'production';
+    const secure = useSecureCookies();
 
     next.cookies.set(ACCESS_COOKIE, pair.accessToken, {
       httpOnly: true,

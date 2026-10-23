@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 import { ACCESS_COOKIE, REFRESH_COOKIE } from './api';
+import { useSecureCookies } from './cookieSecurity';
 
 /**
  * Cookie handling for the session.
@@ -17,6 +18,7 @@ import { ACCESS_COOKIE, REFRESH_COOKIE } from './api';
 const ACCESS_MAX_AGE = 15 * 60;
 const REFRESH_MAX_AGE = 30 * 24 * 60 * 60;
 
+
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
@@ -24,7 +26,7 @@ export interface TokenPair {
 
 export async function setSessionCookies(pair: TokenPair): Promise<void> {
   const store = await cookies();
-  const secure = process.env.NODE_ENV === 'production';
+  const secure = useSecureCookies();
 
   store.set(ACCESS_COOKIE, pair.accessToken, {
     httpOnly: true,

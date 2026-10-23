@@ -28,7 +28,7 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env.production}
+ Service name, not the host's address: the dashboard reaches the APIPOSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env.production}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
       POSTGRES_DB: ${POSTGRES_DB:-psx_trader}
     volumes:
@@ -103,6 +103,12 @@ services:
       # over the compose network, so this works regardless of what the server
       # is called or which interface it answers on.
       API_BASE_URL: http://api:4000
+      # A browser throws away a Secure cookie that arrives over plain http://,
+      # and this box is deliberately HTTP on a private network. Left at the
+      # default the session never persists: signing in appears to work and
+      # every page then bounces back to the login screen. Defaults to on, so
+      # turning it off stays a deliberate choice recorded in .env.production.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
     ports:
       - '${WEB_PORT:-3000}:3000'
     depends_on:
