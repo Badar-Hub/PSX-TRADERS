@@ -4,6 +4,7 @@ import { createApp } from '../../src/app.js';
 import { loadEnv } from '../../src/env.js';
 import { prisma } from '../../src/db/prisma.js';
 import { hashCode } from '../../src/auth/verification.js';
+import { hashPassword } from '../../src/auth/password.js';
 import { auth, codeSentTo, emailsTo, mailer, signUpActive, signUpAdmin } from '../helpers/account.js';
 
 /**
@@ -554,3 +555,119 @@ describe.skipIf(!hasDatabase)('the admin queue', () => {
 function codeSentEmailHasCode(text: string): boolean {
   return /\b\d{6}\b/.test(text);
 }
+
+/**
+ * The third gate: a password the account's owner never chose.
+ *
+ * An account provisioned from the CLI gets a generated password that has to
+ * travel to its owner somehow — a message, a note, read aloud. Treating it as
+ * a one-time credential is the point, so what is asserted here is mostly that
+ * the flag is a control rather than a suggestion: the API refuses real routes
+ * while it is set, and the only way to clear it still needs the password.
+ */
+describe.skipIf(!hasDatabase)('a provisioned account must choose a password', () => {
+  beforeEach(async () => {
+    await wipeUsers();
+  });
+
+  async function provision(email: string, password: string): Promise<void> {
+    await prisma.user.create({
+      data: {
+        email,
+        name: 'Provisioned',
+        passwordHash: await hashPassword(password),
+        status: 'ACTIVE',
+        role: 'ADMIN',
+        emailVerifiedAt: new Date(),
+        approvedAt: new Date(),
+        mustResetPassword: true,
+      },
+    });
+  }
+
+  it('reports RESET_PASSWORD at login even though the account is active', async () => {
+    await provision('provisioned@example.com', 'temporary-password');
+
+    const response = await request(app!)
+      .post('/api/auth/login')
+      .send({ email: 'provisioned@example.com', password: 'temporary-password' })
+      .expect(200);
+
+    expect(response.body.user.status).toBe('ACTIVE');
+    expect(response.body.next).toBe('RESET_PASSWORD');
+  });
+
+  it('refuses the rest of the API until the password is replaced', async () => {
+    await provision('provisioned@example.com', 'temporary-password');
+    const login = await request(app!)
+      .post('/api/auth/login')
+      .send({ email: 'provisioned@example.com', password: 'temporary-password' })
+      .expect(200);
+
+    const response = await request(app!)
+      .get('/api/portfolios')
+      .set({ authorization: `Bearer ${login.body.accessToken}` })
+      .expect(403);
+
+    expect(response.body.error.code).toBe('PASSWORD_RESET_REQUIRED');
+  });
+
+  it('will not change the password without the current one', async () => {
+    await provision('provisioned@example.com', 'temporary-password');
+    const login = await request(app!)
+      .post('/api/auth/login')
+      .send({ email: 'provisioned@example.com', password: 'temporary-password' })
+      .expect(200);
+
+    await request(app!)
+      .post('/api/auth/change-password')
+      .set({ authorization: `Bearer ${login.body.accessToken}` })
+      .send({ currentPassword: 'not-the-password', newPassword: 'a-brand-new-password' })
+      .expect(401);
+
+    // Still flagged, so a failed attempt cannot be used to slip past the gate.
+    const user = await prisma.user.findUnique({ where: { email: 'provisioned@example.com' } });
+    expect(user?.mustResetPassword).toBe(true);
+  });
+
+  it('clears the flag, opens the API and revokes the other sessions', async () => {
+    await provision('provisioned@example.com', 'temporary-password');
+
+    // Two sessions, as if the temporary password had been used twice.
+    const first = await request(app!)
+      .post('/api/auth/login')
+      .send({ email: 'provisioned@example.com', password: 'temporary-password' })
+      .expect(200);
+    const second = await request(app!)
+      .post('/api/auth/login')
+      .send({ email: 'provisioned@example.com', password: 'temporary-password' })
+      .expect(200);
+
+    const changed = await request(app!)
+      .post('/api/auth/change-password')
+      .set({ authorization: `Bearer ${second.body.accessToken}` })
+      .send({ currentPassword: 'temporary-password', newPassword: 'a-brand-new-password' })
+      .expect(200);
+
+    expect(changed.body.next).toBe('READY');
+
+    // The pair the change issued works on a real route.
+    await request(app!)
+      .get('/api/portfolios')
+      .set({ authorization: `Bearer ${changed.body.accessToken}` })
+      .expect(200);
+
+    // The other session's refresh token is gone, so whoever held the
+    // temporary password cannot keep using it.
+    await request(app!)
+      .post('/api/auth/refresh')
+      .send({ refreshToken: first.body.refreshToken })
+      .expect(401);
+
+    // And the old password no longer signs in.
+    await request(app!)
+      .post('/api/auth/login')
+      .send({ email: 'provisioned@example.com', password: 'temporary-password' })
+      .expect(401);
+  });
+});

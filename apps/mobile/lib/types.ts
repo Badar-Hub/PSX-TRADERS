@@ -250,7 +250,12 @@ export type UserStatus =
   | 'REJECTED'
   | 'SUSPENDED';
 
-export type NextStep = 'VERIFY_EMAIL' | 'AWAITING_APPROVAL' | 'READY' | 'BLOCKED';
+export type NextStep =
+  | 'VERIFY_EMAIL'
+  | 'AWAITING_APPROVAL'
+  | 'RESET_PASSWORD'
+  | 'READY'
+  | 'BLOCKED';
 
 export interface Account {
   id: string;

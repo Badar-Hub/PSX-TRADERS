@@ -27,7 +27,8 @@ export type BlockedCode =
   | 'EMAIL_NOT_VERIFIED'
   | 'AWAITING_APPROVAL'
   | 'ACCOUNT_REJECTED'
-  | 'ACCOUNT_SUSPENDED';
+  | 'ACCOUNT_SUSPENDED'
+  | 'PASSWORD_RESET_REQUIRED';
 
 export interface AccountState {
   status: string;
@@ -37,6 +38,32 @@ export interface AccountState {
   emailVerifiedAt: Date | null;
   approvedAt: Date | null;
   decisionNote: string | null;
+  mustResetPassword: boolean;
+}
+
+/**
+ * What the client should show next.
+ *
+ * Lived as a ternary in both `/login` and `/me` before this. The two have to
+ * agree — the clients route on it, so a disagreement sends someone to a screen
+ * that immediately redirects them back — and keeping one copy is the only way
+ * to be sure they do.
+ */
+export type NextStep =
+  | 'VERIFY_EMAIL'
+  | 'AWAITING_APPROVAL'
+  | 'RESET_PASSWORD'
+  | 'READY'
+  | 'BLOCKED';
+
+export function nextStep(account: { status: string; mustResetPassword: boolean }): NextStep {
+  if (account.status === 'PENDING_VERIFICATION') return 'VERIFY_EMAIL';
+  if (account.status === 'PENDING_APPROVAL') return 'AWAITING_APPROVAL';
+  if (account.status !== 'ACTIVE') return 'BLOCKED';
+  // Checked after the status gates, not before: an account that is not yet
+  // approved has a more pressing thing to be told, and being sent to change a
+  // password it cannot yet use would be a dead end.
+  return account.mustResetPassword ? 'RESET_PASSWORD' : 'READY';
 }
 
 declare module 'express-serve-static-core' {
@@ -85,6 +112,7 @@ export function loadAccount(tokens: Tokens): RequestHandler[] {
             emailVerifiedAt: true,
             approvedAt: true,
             decisionNote: true,
+            mustResetPassword: true,
           },
         });
 
@@ -113,6 +141,21 @@ export function requireActiveUser(tokens: Tokens): RequestHandler[] {
       }
 
       if (account.status === 'ACTIVE') {
+        // A generated password is a one-time credential. Enforced here rather
+        // than left to the clients, so the account genuinely cannot be used —
+        // including by anything that reaches the API directly — until the
+        // person it belongs to has chosen a password of their own.
+        if (account.mustResetPassword) {
+          next(
+            new AppError(
+              403,
+              'PASSWORD_RESET_REQUIRED',
+              'This account was created with a temporary password. Choose a new one to continue.',
+              { status: account.status },
+            ),
+          );
+          return;
+        }
         next();
         return;
       }

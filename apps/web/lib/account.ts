@@ -22,7 +22,12 @@ export type UserStatus =
   | 'REJECTED'
   | 'SUSPENDED';
 
-export type NextStep = 'VERIFY_EMAIL' | 'AWAITING_APPROVAL' | 'READY' | 'BLOCKED';
+export type NextStep =
+  | 'VERIFY_EMAIL'
+  | 'AWAITING_APPROVAL'
+  | 'RESET_PASSWORD'
+  | 'READY'
+  | 'BLOCKED';
 
 export interface Account {
   id: string;
@@ -53,6 +58,7 @@ export async function loadAccount(): Promise<Me | null> {
 const STEP_PATHS: Record<Exclude<NextStep, 'READY'>, string> = {
   VERIFY_EMAIL: '/verify',
   AWAITING_APPROVAL: '/pending',
+  RESET_PASSWORD: '/reset-password',
   BLOCKED: '/blocked',
 };
 

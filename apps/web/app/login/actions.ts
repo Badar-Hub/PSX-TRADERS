@@ -57,6 +57,8 @@ function destinationFor(next: NextStep | undefined, codeExpiresAt?: string): str
         : `/verify?expires=${encodeURIComponent(codeExpiresAt)}`;
     case 'AWAITING_APPROVAL':
       return '/pending';
+    case 'RESET_PASSWORD':
+      return '/reset-password';
     case 'BLOCKED':
       return '/blocked';
     default:

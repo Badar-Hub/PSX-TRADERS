@@ -15,16 +15,20 @@
  * themselves out, which a web-only approval screen cannot offer.
  */
 
+import { randomBytes } from 'node:crypto';
+
 import { createMailer } from '../email/mailer.js';
 import { approvedEmail } from '../email/templates.js';
 import { loadEnv } from '../env.js';
 import { prisma } from '../db/prisma.js';
+import { assertPasswordUsable, hashPassword } from '../auth/password.js';
 
 function usage(): never {
   console.log(
     [
       'Usage:',
       '  admin list [status]            list accounts (default: PENDING_APPROVAL)',
+      '  admin create <email> [name]    create an active admin with a temporary password',
       '  admin grant <email>            make an account an admin, and active',
       '  admin revoke <email>           demote an admin back to member',
       '  admin approve <email>          approve a verified account',
@@ -73,6 +77,54 @@ async function main(): Promise<void> {
     const counts = await prisma.user.groupBy({ by: ['status'], _count: { _all: true } });
     console.log('\nAll accounts by status:');
     for (const row of counts) console.log(`  ${row.status.padEnd(21)} ${row._count._all}`);
+    return;
+  }
+
+  // Handled before the lookup below, which requires the account to exist.
+  if (command === 'create') {
+    if (argument === undefined) usage();
+    const email = argument.trim().toLowerCase();
+    const name = rest.join(' ').trim();
+
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing !== null) {
+      console.error(`${email} already exists (${existing.status}, ${existing.role}).`);
+      process.exitCode = 1;
+      return;
+    }
+
+    // base64url of 18 bytes: 24 characters, no ambiguity about which symbols
+    // survive being pasted through a chat window or read aloud.
+    const password = randomBytes(18).toString('base64url');
+    assertPasswordUsable(password);
+
+    const user = await prisma.user.create({
+      data: {
+        email,
+        name: name === '' ? null : name,
+        passwordHash: await hashPassword(password),
+        // Both onboarding gates are passed deliberately. Whoever runs this has
+        // database access, so asking them to prove the address by code and
+        // then approve it from another screen would be ceremony, not control.
+        status: 'ACTIVE',
+        role: 'ADMIN',
+        emailVerifiedAt: new Date(),
+        approvedAt: new Date(),
+        decisionNote: 'Created from the command line.',
+        // The password above is a one-time credential: it was generated, not
+        // chosen, and it has to travel to its owner somehow. The API refuses
+        // every other route until it is replaced.
+        mustResetPassword: true,
+      },
+      select: { email: true, name: true, status: true, role: true },
+    });
+
+    console.log(`Created ${user.email} (${user.name ?? 'no name'}) as ${user.role}, ${user.status}.`);
+    console.log('');
+    console.log(`  Temporary password: ${password}`);
+    console.log('');
+    console.log('  It works once, to sign in. Every screen stays blocked until a new password');
+    console.log('  is chosen, and changing it signs out every other session. Do not store it.');
     return;
   }
 

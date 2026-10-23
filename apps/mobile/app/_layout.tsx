@@ -53,6 +53,9 @@ function Gate(): React.ReactNode {
       case 'AWAITING_APPROVAL':
         router.replace('/(auth)/pending');
         return;
+      case 'RESET_PASSWORD':
+        router.replace('/(auth)/reset-password');
+        return;
       case 'BLOCKED':
         router.replace('/(auth)/blocked');
         return;

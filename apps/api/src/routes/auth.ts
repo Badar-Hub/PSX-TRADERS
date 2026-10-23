@@ -4,9 +4,15 @@ import { z } from 'zod';
 import { badRequest, conflict, unauthorized } from '../http/errors.js';
 import { body, validate } from '../http/validate.js';
 import { prisma } from '../db/prisma.js';
-import { hashPassword, needsRehash, verifyPassword, WeakPasswordError } from '../auth/password.js';
+import {
+  assertPasswordUsable,
+  hashPassword,
+  needsRehash,
+  verifyPassword,
+  WeakPasswordError,
+} from '../auth/password.js';
 import { hashRefreshToken, type Tokens } from '../auth/tokens.js';
-import { loadAccount, currentAccount } from '../auth/access.js';
+import { loadAccount, currentAccount, nextStep } from '../auth/access.js';
 import { currentUser } from '../auth/middleware.js';
 import {
   configFromEnv,
@@ -47,6 +53,15 @@ const LoginBody = z.object({
 });
 
 const RefreshBody = z.object({ refreshToken: z.string().min(1).max(512) });
+
+const ChangePasswordBody = z.object({
+  // No minimum on the current one: it is checked against the stored hash, and
+  // a length rule here would only reject the attempt a step earlier with a
+  // less useful message.
+  currentPassword: z.string().min(1).max(1024),
+  // Matches RegisterBody, so a password accepted at sign-up is accepted here.
+  newPassword: z.string().min(10).max(1024),
+});
 
 const VerifyBody = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
@@ -296,14 +311,7 @@ export function authRoutes(tokens: Tokens, env: Env, mailer: Mailer): Router {
         role: user.role,
       },
       ...pair,
-      next:
-        user.status === 'ACTIVE'
-          ? 'READY'
-          : user.status === 'PENDING_VERIFICATION'
-            ? 'VERIFY_EMAIL'
-            : user.status === 'PENDING_APPROVAL'
-              ? 'AWAITING_APPROVAL'
-              : 'BLOCKED',
+      next: nextStep(user),
     });
   });
 
@@ -369,16 +377,77 @@ export function authRoutes(tokens: Tokens, env: Env, mailer: Mailer): Router {
         approvedAt: account.approvedAt?.toISOString() ?? null,
         decisionNote: account.decisionNote,
       },
-      next:
-        account.status === 'ACTIVE'
-          ? 'READY'
-          : account.status === 'PENDING_VERIFICATION'
-            ? 'VERIFY_EMAIL'
-            : account.status === 'PENDING_APPROVAL'
-              ? 'AWAITING_APPROVAL'
-              : 'BLOCKED',
+      next: nextStep(account),
     });
   });
+
+  /**
+   * Change the password of the signed-in account.
+   *
+   * Deliberately behind `loadAccount` rather than `requireActiveUser`: an
+   * account flagged for a password reset is refused by the latter, so routing
+   * this through it would leave the only way out of the flag locked behind the
+   * flag. The current password is still required, which is what keeps a stolen
+   * access token from being enough to take the account over.
+   */
+  router.post(
+    '/change-password',
+    limiter,
+    ...loadAccount(tokens),
+    validate({ body: ChangePasswordBody }),
+    async (req, res) => {
+      const input = body<z.infer<typeof ChangePasswordBody>>(req);
+      const { id } = currentUser(req);
+
+      const user = await prisma.user.findUnique({ where: { id } });
+      if (user === null) throw unauthorized('Account no longer exists');
+
+      const ok = await verifyPassword(input.currentPassword, user.passwordHash);
+      if (!ok) throw unauthorized('Current password is incorrect');
+
+      if (input.currentPassword === input.newPassword) {
+        throw badRequest('The new password must differ from the current one');
+      }
+
+      try {
+        assertPasswordUsable(input.newPassword);
+      } catch (error) {
+        if (error instanceof WeakPasswordError) throw badRequest(error.message);
+        throw error;
+      }
+
+      const passwordHash = await hashPassword(input.newPassword);
+
+      await prisma.$transaction([
+        prisma.user.update({
+          where: { id },
+          data: { passwordHash, mustResetPassword: false },
+        }),
+        // Every other session dies with the old password. If the temporary one
+        // leaked — and a password that travelled through a message should be
+        // assumed to have — this is what closes the door on whoever has it.
+        prisma.refreshToken.deleteMany({ where: { userId: id, revokedAt: null } }),
+      ]);
+
+      const pair = await issueTokenPair(
+        tokens,
+        { id: user.id, email: user.email },
+        req.header('user-agent'),
+      );
+
+      res.json({
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          status: user.status,
+          role: user.role,
+        },
+        ...pair,
+        next: nextStep({ status: user.status, mustResetPassword: false }),
+      });
+    },
+  );
 
   return router;
 }

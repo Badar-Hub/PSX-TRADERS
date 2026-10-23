@@ -50,6 +50,16 @@ model User {
   status UserStatus @default(PENDING_VERIFICATION)
   role   UserRole   @default(MEMBER)
 
+  /// Forces a password change before the account can be used for anything.
+  ///
+  /// Set when an account is provisioned from the command line rather than
+  /// signed up for: the password was generated, the person it belongs to never
+  /// chose it, and it had to travel to them somehow — a message, a note, a
+  /// read-out. Treating that password as a one-time credential is the whole
+  /// point, so this is enforced in `requireActiveUser` rather than suggested
+  /// in the UI; a flag the client could ignore would not be a control.
+  mustResetPassword Boolean @default(false)
+
   emailVerifiedAt DateTime?
   approvedAt      DateTime?
   /// Who let them in. Null for the bootstrap admin, created from the CLI.

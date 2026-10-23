@@ -50,6 +50,8 @@ interface SessionValue {
     name?: string;
   }) => Promise<{ codeExpiresAt: string | null; warning: string | null }>;
   signIn: (input: { email: string; password: string }) => Promise<void>;
+  /** Replaces a temporary password. Clears the reset flag and re-issues tokens. */
+  changePassword: (input: { currentPassword: string; newPassword: string }) => Promise<void>;
   verify: (input: { email: string; code: string }) => Promise<void>;
   resend: (email: string) => Promise<{ codeExpiresAt: string | null }>;
   signOut: () => Promise<void>;
@@ -194,6 +196,26 @@ export function SessionProvider({ children }: { children: ReactNode }): ReactNod
     [apply],
   );
 
+  const changePassword = useCallback(
+    async (input: { currentPassword: string; newPassword: string }) => {
+      // Not anonymous: the endpoint identifies the account from the access
+      // token. It sits behind loadAccount rather than requireActiveUser, so a
+      // token flagged for reset still reaches it — otherwise the only way out
+      // of the flag would be locked behind the flag.
+      const response = await api<AuthResponse>('/api/auth/change-password', {
+        method: 'POST',
+        body: input,
+      });
+      // Changing the password revoked every refresh token, this session's
+      // included. Storing the pair the API just issued is what keeps the user
+      // signed in instead of bouncing them to the sign-in screen.
+      await storeTokens(response.accessToken, response.refreshToken);
+      refreshTokenRef.current = response.refreshToken;
+      apply(response);
+    },
+    [apply],
+  );
+
   const verify = useCallback(
     async (input: { email: string; code: string }) => {
       await api<{ status: string; next: NextStep }>('/api/auth/verify-email', {
@@ -255,6 +277,7 @@ export function SessionProvider({ children }: { children: ReactNode }): ReactNod
       codeExpiresAt,
       signUp,
       signIn,
+      changePassword,
       verify,
       resend,
       signOut,
@@ -268,6 +291,7 @@ export function SessionProvider({ children }: { children: ReactNode }): ReactNod
       codeExpiresAt,
       signUp,
       signIn,
+      changePassword,
       verify,
       resend,
       signOut,

@@ -1,9 +1,16 @@
 'use server';
 
 import { redirect } from 'next/navigation';
-import { apiPublic } from '@/lib/api';
+import { api, apiPublic, ApiError } from '@/lib/api';
+import { setSessionCookies } from '@/lib/session';
 import { loadAccount } from '@/lib/account';
 import type { VerifyState } from './verifyState';
+import type { ResetPasswordState } from './resetPasswordState';
+
+interface ChangePasswordSuccess {
+  accessToken: string;
+  refreshToken: string;
+}
 
 /**
  * The verification steps, as server actions.
@@ -74,4 +81,59 @@ export async function resendCode(previous: VerifyState): Promise<VerifyState> {
     attemptsLeft: null,
     codeExpiresAt: result.data.codeExpiresAt ?? null,
   };
+}
+
+/**
+ * Replace a temporary password with one the account's owner chose.
+ *
+ * The API returns a fresh token pair, because changing the password revokes
+ * every outstanding refresh token — including this session's. Writing the new
+ * pair to the cookies is what stops a successful reset from logging the user
+ * straight back out.
+ */
+export async function changePassword(
+  previous: ResetPasswordState,
+  formData: FormData,
+): Promise<ResetPasswordState> {
+  const me = await loadAccount();
+  if (me === null) redirect('/login');
+
+  const currentPassword = String(formData.get('currentPassword') ?? '');
+  const newPassword = String(formData.get('newPassword') ?? '');
+  const confirmPassword = String(formData.get('confirmPassword') ?? '');
+
+  if (currentPassword === '' || newPassword === '') {
+    return { ...previous, error: 'Fill in both passwords.' };
+  }
+  if (newPassword.length < 10) {
+    return { ...previous, error: 'The new password must be at least 10 characters.' };
+  }
+  // Checked here rather than at the API, which has no business knowing the
+  // form asked twice.
+  if (newPassword !== confirmPassword) {
+    return { ...previous, error: 'The two new passwords do not match.' };
+  }
+
+  let result: ChangePasswordSuccess;
+  try {
+    result = await api<ChangePasswordSuccess>('/api/auth/change-password', {
+      method: 'POST',
+      body: { currentPassword, newPassword },
+      noRedirect: true,
+    });
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return {
+        ...previous,
+        error:
+          error.status === 401
+            ? 'That temporary password is not right. Check it and try again.'
+            : error.message,
+      };
+    }
+    throw error;
+  }
+
+  await setSessionCookies(result);
+  redirect('/');
 }
