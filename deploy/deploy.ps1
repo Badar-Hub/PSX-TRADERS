@@ -38,7 +38,10 @@ param(
 
     [string] $KeyFile = (Join-Path $HOME '.ssh\psx_trader_staging'),
 
-    [string] $RemotePath = '/srv/psx-trader',
+    # Relative, so it resolves under the deploy account's home directory. An
+    # absolute path like /srv/psx-trader needs root to create, and the point of
+    # the deploy account is that it does not have it.
+    [string] $RemotePath = 'psx-trader',
 
     # Override to deploy a tag or an older commit.
     [string] $Ref = 'HEAD',
