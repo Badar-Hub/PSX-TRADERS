@@ -8,6 +8,7 @@
     "dev": "turbo run dev",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck",
+    "deploy:staging": "powershell -ExecutionPolicy Bypass -File deploy/deploy.ps1",
     "infra:up": "docker compose up -d",
     "infra:down": "docker compose down",
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\""

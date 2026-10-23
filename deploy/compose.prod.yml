@@ -1,0 +1,134 @@
+# Production-shaped stack for the staging server.
+#
+# Deliberately different from the docker-compose.yml at the repository root,
+# which exists only to give a developer a Postgres and a Redis on odd ports.
+# Differences worth knowing:
+#
+#   - No Redis. Nothing in the codebase uses it; the nightly job iterates a few
+#     hundred symbols in-process and says so in its own comments.
+#   - Postgres publishes no port. Only the API talks to it, over this file's
+#     private network. Staging holds real trading positions, so the database
+#     should not be reachable from the rest of the network at all.
+#   - Migrations are their own one-shot service that the API waits for, rather
+#     than something run by hand after a deploy and forgotten.
+#   - Secrets come from an env file that lives on the server and is never part
+#     of a deploy. See env.production.example.
+
+# Not "psx-trader". Compose derives a project name from the directory when a
+# file does not set one, so the root docker-compose.yml's project is already
+# "psx-trader" on any machine where the repository is checked out. Sharing the
+# name would make this file's `postgres` service adopt and recreate the
+# development container psx-postgres — pointing it at a different volume, so
+# the developer's database would appear to have emptied itself — and would let
+# `up --remove-orphans` delete psx-redis outright.
+name: psx-trader-prod
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env.production}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
+      POSTGRES_DB: ${POSTGRES_DB:-psx_trader}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # Everything else waits on this, so it has to mean "accepting queries",
+      # not "the process started".
+      test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Runs `prisma migrate deploy` and exits. `migrate deploy` only applies
+  # existing migrations and never generates or resets one, which is the only
+  # Prisma command that belongs near real data.
+  migrate:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    command: ['pnpm', '--filter', '@psx/api', 'db:deploy']
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env.production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+    ports:
+      # Published because the phone app talks to this directly. app.json's
+      # extra.apiBaseUrl must name this host and port. The host side is
+      # configurable so the stack can be brought up on a machine where
+      # something already owns the default.
+      - '${API_PORT:-4000}:4000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        # Starting the API against an un-migrated database produces a wall of
+        # "table does not exist" rather than anything diagnosable.
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('node:http').get('http://127.0.0.1:4000/health/ready',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      # Service name, not the host's address: the dashboard reaches the API
+      # over the compose network, so this works regardless of what the server
+      # is called or which interface it answers on.
+      API_BASE_URL: http://api:4000
+    ports:
+      - '${WEB_PORT:-3000}:3000'
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # A mail catcher, so a staging database that starts empty can have accounts
+  # created in it. Sign-up emails a verification code valid for ten minutes,
+  # and the API refuses EMAIL_TRANSPORT=console in production — so without
+  # somewhere for SMTP to land, nobody can get past the sign-up screen.
+  #
+  # Behind a profile because it has no business in a real production
+  # deployment: it accepts every message and shows them all to anyone who
+  # opens the web UI. Enable it by setting COMPOSE_PROFILES=mailcatcher in
+  # .env.production, and point SMTP_HOST at `mailpit`, SMTP_PORT at 1025.
+  # Replace both with a real SMTP server when mail should actually be
+  # delivered, and drop the profile.
+  mailpit:
+    image: axllent/mailpit:v1.21
+    profiles: ['mailcatcher']
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: 500
+    ports:
+      # The inbox UI. SMTP itself (1025) stays on the compose network.
+      - '${MAILPIT_UI_PORT:-8025}:8025'
+
+volumes:
+  pgdata:
