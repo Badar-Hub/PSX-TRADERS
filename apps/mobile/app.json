@@ -26,7 +26,8 @@
       "expo-secure-store",
       "expo-font",
       "./plugins/withShortNativeBuildPath",
-      "./plugins/withReleaseSigning"
+      "./plugins/withReleaseSigning",
+      "./plugins/withCleartextForApiHost"
     ],
     "experiments": {
       "typedRoutes": false
